@@ -1,0 +1,15 @@
+import {webcrypto,randomBytes,randomUUID} from 'node:crypto';
+import {writeFileSync} from 'node:fs';
+const username=(process.env.CBT_ADMIN_USERNAME||'').trim().toLowerCase();
+const password=process.env.CBT_ADMIN_PASSWORD||'';
+const email=(process.env.CBT_ADMIN_EMAIL||'').trim();
+const name=(process.env.CBT_ADMIN_NAME||'Super Admin').trim();
+if(!/^[a-z0-9._-]{3,64}$/.test(username)||password.length<12||password.length>128||!email.includes('@'))throw Error('Isi CBT_ADMIN_USERNAME, CBT_ADMIN_EMAIL, CBT_ADMIN_PASSWORD (12–128 karakter); CBT_ADMIN_NAME opsional.');
+const salt=randomBytes(24).toString('hex'),id=randomUUID(),revision=randomBytes(24).toString('hex');
+const key=await webcrypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveBits']);
+const hash=Buffer.from(await webcrypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:100000,hash:'SHA-256'},key,256)).toString('hex');
+const quote=s=>"'"+String(s).replaceAll("'","''")+"'";
+const rows=[['installation','config',{createdAt:Date.now()}],[id,'staff',{name,email,role:'Super Admin',unit:'Semua',permission:'Full akses',disabled:false,demo:false}],['credential-'+username,'credential',{staffId:id,username,salt,hash,revision}]];
+const sql=rows.map(([id,kind,data])=>`INSERT INTO records(id,kind,data) VALUES(${quote(id)},${quote(kind)},${quote(JSON.stringify(data))});`).join('\n')+'\n';
+writeFileSync(process.env.CBT_BOOTSTRAP_OUTPUT||'bootstrap-admin.sql',sql,{mode:0o600,flag:'wx'});
+console.log('SQL bootstrap ditulis. Terapkan hanya ke database baru; jangan commit file ini. Password tidak dicetak.');

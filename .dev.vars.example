@@ -1,0 +1,2 @@
+# Salin ke .dev.vars dan isi hasil openssl rand -hex 32 (64 karakter hex).
+TOKEN_VAULT_KEY=REPLACE_WITH_RANDOM_64_HEX_CHARACTERS
