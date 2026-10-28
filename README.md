@@ -46,3 +46,7 @@ pnpm build
 `pnpm dev` hanya untuk pengembangan. Produksi memakai `pnpm deploy` setelah database, bootstrap dan secret siap.
 
 Pengujian fungsi menggunakan SQLite sintetis. UAT sekolah dan uji beban jaringan setempat tetap diperlukan sebelum ujian resmi.
+
+## Pembaruan 28 Oktober 2026
+
+Revisi admin ke-3: tahun pelajaran, impor sederhana, reset/hapus akun, penugasan multikelas, template Word 30 soal, pop-up bank dan snapshot ujian. Lihat [checklist revisi](docs/review-admin-rev3-2026-10-28.md). Schema SQL tidak berubah.

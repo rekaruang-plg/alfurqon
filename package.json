@@ -10,7 +10,7 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json --local",
     "check": "tsc --noEmit",
-    "test": "node tests/api.test.mjs && node tests/bootstrap.test.mjs",
+    "test": "node tests/api.test.mjs && node tests/bootstrap.test.mjs && node tests/word-template.test.mjs",
     "db:generate": "drizzle-kit generate",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "deploy": "node scripts/check-deploy.mjs && wrangler deploy --config dist/server/wrangler.json"

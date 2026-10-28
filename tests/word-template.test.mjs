@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+import ts from 'typescript';
+import JSZip from 'jszip';
+import mammoth from 'mammoth';
+const js=ts.transpileModule(fs.readFileSync('lib/question-template.ts','utf8').replace("import JSZip from 'jszip';",''),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const box={exports:{},JSZip};vm.runInNewContext(js,box);const {questionTemplateBuffer,questionFromFields}=box.exports;
+const buffer=await questionTemplateBuffer();const zip=await JSZip.loadAsync(buffer);const xml=await zip.file('word/document.xml').async('string');assert.equal((xml.match(/<w:tbl>/g)||[]).length,30);const html=(await mammoth.convertToHtml({buffer:Buffer.from(buffer)})).value;assert.equal((html.match(/<table>/g)||[]).length,30);
+const base={PERTANYAAN:'٢ + ٣ = ?',OPSI_A:'4',OPSI_B:'5',KUNCI:'B'};
+assert.equal(questionFromFields({TIPE:'PG',...base},'a').key,'1');assert.equal(questionFromFields({TIPE:'MCMA',...base,KUNCI:'A,B'},'b').key,'0,1');assert.equal(questionFromFields({TIPE:'ISIAN',PERTANYAAN:'Air?',KUNCI:'H₂O',MODE_JAWABAN:'KIMIA'},'c').key,'H₂O');assert.equal(questionFromFields({TIPE:'URAIAN',PERTANYAAN:'Jelaskan',PEDOMAN_KOREKSI:'Gaya tarik'},'d').key,'Gaya tarik');assert.equal(questionFromFields({TIPE:'MENJODOHKAN',PERTANYAAN:'Pasangkan',KIRI_1:'satu',KIRI_2:'dua',KANAN_A:'2',KANAN_B:'1',KUNCI_1:'B',KUNCI_2:'A'},'e').key,'1,0');
+assert.equal(questionFromFields({TIPE:'PG',PERTANYAAN:''},'empty'),null);assert.equal(questionFromFields({'Jenis Soal':'PG','Pertanyaan:':'Test',OPSI_A:'a',OPSI_C:'c','Kunci Jawaban':'C'},'alias').key,'1');assert.throws(()=>questionFromFields({...base,KUNCI:'E'},'bad'),/tidak memiliki/);assert.throws(()=>questionFromFields({...base,POIN_MAKS:'-1'},'bad'),/Poin/);
+console.log('PASS: generated DOCX has 30 importable tables; five question types, aliases, blank rows, Arabic/chemical symbols, key remapping and validation.');

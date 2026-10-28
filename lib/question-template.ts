@@ -1,0 +1,35 @@
+import JSZip from 'jszip';
+const xml=(s:string)=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+export async function questionTemplateBuffer(){
+ const zip=new JSZip();
+ const para=(s:string)=>`<w:p><w:r><w:t xml:space="preserve">${xml(s)}</w:t></w:r></w:p>`;
+ const rows=[['TIPE','PG'],['LINGKUP_MATERI',''],['PERTANYAAN',''],['OPSI_A',''],['OPSI_B',''],['OPSI_C',''],['OPSI_D',''],['OPSI_E',''],['KUNCI',''],['POIN_MAKS','10'],['MODE_JAWABAN','TEKS'],['KATA_KUNCI',''],['PEDOMAN_KOREKSI',''],['KIRI_1',''],['KIRI_2',''],['KIRI_3',''],['KANAN_A',''],['KANAN_B',''],['KANAN_C',''],['KUNCI_1',''],['KUNCI_2',''],['KUNCI_3','']];
+ const instructions=['Template Soal CBT Al Furqon','30 tempat soal. Isi kolom kanan; jangan ubah label kolom kiri. Tabel dengan PERTANYAAN kosong dilewati saat impor.','TIPE: PG (satu jawaban), PG_KOMPLEKS (MCMA), ISIAN, URAIAN, atau MENJODOHKAN.','PG/MCMA: isi OPSI_A sampai OPSI_E sesuai kebutuhan tanpa melompati huruf. KUNCI: A untuk PG, A,C untuk MCMA.','ISIAN/URAIAN: isi KUNCI atau PEDOMAN_KOREKSI. KATA_KUNCI opsional, pisahkan dengan titik koma.','MENJODOHKAN: isi KIRI_1–3, KANAN_A–C dan KUNCI_1–3 (huruf pasangan). Baris dapat ditambah dengan nomor/huruf berikutnya.','MODE_JAWABAN: TEKS, MATEMATIKA, FISIKA, KIMIA atau ARAB. POIN_MAKS harus lebih dari 0.','Gambar dapat ditempel di sel pertanyaan atau opsi; rumus menggunakan Equation Word atau LaTeX. Periksa pratinjau setelah impor.'];
+ const tables=Array.from({length:30},(_,i)=>`<w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Soal ${i+1}</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w="10000" w:type="dxa"/><w:tblBorders>${['top','left','bottom','right','insideH','insideV'].map(b=>`<w:${b} w:val="single" w:sz="4" w:color="D9D9D9"/>`).join('')}</w:tblBorders><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="2600"/><w:gridCol w:w="7400"/></w:tblGrid>${rows.map(([k,v])=>`<w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2600" w:type="dxa"/></w:tcPr>${para(k)}</w:tc><w:tc><w:tcPr><w:tcW w:w="7400" w:type="dxa"/></w:tcPr>${para(v)}</w:tc></w:tr>`).join('')}</w:tbl>`).join('');
+ zip.file('[Content_Types].xml','<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
+ zip.file('_rels/.rels','<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+ zip.file('word/_rels/document.xml.rels','<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+ zip.file('word/styles.xml','<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="20"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="40"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>');
+ zip.file('word/document.xml',`<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${instructions.map(para).join('')}${tables}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="900" w:bottom="720" w:left="900"/></w:sectPr></w:body></w:document>`);
+ return zip.generateAsync({type:'arraybuffer'});
+}
+export async function downloadQuestionTemplate(){const url=URL.createObjectURL(new Blob([await questionTemplateBuffer()],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}));const a=document.createElement('a');a.href=url;a.download='Template-Soal-CBT-Al-Furqon-30.docx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+export function normalizeQuestionFields(input:Record<string,string>){const aliases:Record<string,string>={JENIS_SOAL:'TIPE',JENIS:'TIPE',SOAL:'PERTANYAAN',POIN:'POIN_MAKS',BOBOT:'POIN_MAKS',KUNCI_JAWABAN:'KUNCI',LINGKUP:'LINGKUP_MATERI'};return Object.fromEntries(Object.entries(input).map(([k,v])=>{const key=k.trim().toUpperCase().replace(/[:\s]+$/g,'').replace(/[\s-]+/g,'_');return [aliases[key]||key,v.trim()]}));}
+export function questionFromFields(raw:Record<string,string>,id:string,images:string[]=[]){
+ const m=normalizeQuestionFields(raw);if(!m.PERTANYAAN||/^\[ISI/i.test(m.PERTANYAAN))return null;
+ const kind=(m.TIPE||'PG').toUpperCase().replace(/[\s-]+/g,'_');const types:Record<string,string>={PILIHAN_GANDA:'PG',PILIHAN_GANDA_KOMPLEKS:'PG_KOMPLEKS',MCMA:'PG_KOMPLEKS',ISIAN_SINGKAT:'ISIAN',ESAI:'URAIAN','ESAI_/_URAIAN':'URAIAN'};const type=types[kind]||kind;
+ if(!['PG','PG_KOMPLEKS','ISIAN','URAIAN','MENJODOHKAN'].includes(type))throw Error('Jenis soal tidak dikenal: '+m.TIPE);
+ const filled=(v:string)=>!!v&&!/^\[ISI/i.test(v);const letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+ const optionLetters=letters.split('').filter(l=>filled(m['OPSI_'+l]||'')),options=optionLetters.map(l=>m['OPSI_'+l]);
+ const leftKeys=Object.keys(m).filter(k=>/^KIRI_\d+$/.test(k)&&filled(m[k])).sort((a,b)=>Number(a.slice(5))-Number(b.slice(5)));
+ const rightLetters=letters.split('').filter(l=>filled(m['KANAN_'+l]||''));const left=leftKeys.map(k=>m[k]),right=rightLetters.map(l=>m['KANAN_'+l]);
+ const optionKey=(v:string,ls:string[])=>{const index=ls.indexOf(v.trim().toUpperCase());if(index<0)throw Error('Kunci '+v+' tidak memiliki pilihan jawaban.');return String(index)};
+ let key=m.KUNCI||m.PEDOMAN_KOREKSI||m.RUBRIK||'';
+ if(type==='PG')key=optionKey(key,optionLetters);
+ if(type==='PG_KOMPLEKS')key=key.split(/[,;\s]+/).filter(Boolean).map(v=>optionKey(v,optionLetters)).join(',');
+ if(type==='MENJODOHKAN')key=leftKeys.map(k=>optionKey(m['KUNCI_'+k.slice(5)]||'',rightLetters)).join(',');
+ if(['PG','PG_KOMPLEKS'].includes(type)&&(options.length<2||!key))throw Error('Isi minimal dua opsi dan kunci jawaban.');
+ if(type==='MENJODOHKAN'&&(!left.length||!right.length))throw Error('Isi butir kiri, kanan dan kunci pasangan.');
+ const points=Number(m.POIN_MAKS||10);if(!Number.isFinite(points)||points<=0)throw Error('Poin maksimum harus lebih dari 0.');
+ return {id,type,images,scope:m.LINGKUP_MATERI||'',keywords:m.KATA_KUNCI||'',text:m.PERTANYAAN,points,options,key,mode:(m.MODE_JAWABAN||'TEKS').toUpperCase(),left,right};
+}
