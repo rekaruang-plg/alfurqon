@@ -1,0 +1,2 @@
+import React from 'react';
+export default function ExamStudentIdentity({student}:{student:{name:string;nis:string;unit:string;className:string}}){return <div className="exam-student-identity" aria-label="Identitas peserta ujian"><span className="exam-student-avatar" aria-hidden="true">{student.name?.trim().slice(0,1).toUpperCase()||'S'}</span><div><strong>{student.name||'Peserta ujian'}</strong><span>NIS {student.nis||'—'} · {student.unit} · Kelas {student.className}</span></div></div>}
