@@ -1,5 +1,5 @@
 import {keywordScore,written} from './review-policy';
-export type Question={sourceLabel?:string;importIssues?:string[];importReviewed?:boolean;importSource?:string;scope?:string;sourceId?:string;keywords?:string;images?:string[];id:string;type:'PG'|'PG_KOMPLEKS'|'URAIAN'|'ISIAN'|'MENJODOHKAN';text:string;options:string[];key:string;points:number;mode:string;left?:string[];right?:string[]};
+export type Question={caseSensitive?:boolean;format?:string;sourceLabel?:string;importIssues?:string[];importReviewed?:boolean;importSource?:string;scope?:string;sourceId?:string;keywords?:string;images?:string[];id:string;type:'PG'|'PG_KOMPLEKS'|'URAIAN'|'ISIAN'|'MENJODOHKAN';text:string;options:string[];key:string;points:number;mode:string;left?:string[];right?:string[]};
 export const units=['SD','SMP','SMA'];
 export const starterQuestions:Question[]=[
 {id:'q1',type:'PG',text:'Hasil dari 12 × 8 adalah …',options:['86','96','108','112'],key:'1',points:20,mode:'TEKS'},
