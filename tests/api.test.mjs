@@ -295,3 +295,27 @@ await loginCard(ownerCard);const follow=await call('makeup',{id:oldOther,...wind
 await loginCard(cardsById[mp[0].id]);const recoveryStudentCookie=cookie;await authCall('createRecoveryCode',{currentPassword:'wrong'},400);const recovery=(await (await authCall('createRecoveryCode',{currentPassword:cardsById[mp[0].id].password})).json()).code;assert(recovery&&!JSON.stringify(await state()).includes(recovery));cookie='';await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:'wrong',password:'meeting-reset-private-123'},400);await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:recovery,password:'meeting-reset-private-123'});await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:recovery,password:'meeting-reset-private-456'},400);assert.equal((await routes.GET(new Request('https://cbt.test/api/cbt',{headers:{cookie:recoveryStudentCookie}}))).status,401);await loginCard({...cardsById[mp[0].id],password:'meeting-reset-private-123'});assert((await state()).studentPortal);
 await loginCard(ownerCard);const teacherRecoveryCard=(await call('accountCards',{kind:'teacher',id:roleTeacher.id})).cards[0];await loginCard(teacherRecoveryCard);const tr=(await (await authCall('createRecoveryCode',{currentPassword:teacherRecoveryCard.password})).json()).code;cookie='';await authCall('recoverPassword',{username:teacherRecoveryCard.username,code:tr,password:'meeting-teacher-private-123'});await loginCard({...teacherRecoveryCard,password:'meeting-teacher-private-123'});assert.equal((await state()).staff.role,'Guru');
 console.log('PASS: meeting 29 October student exclusions, unit options, per-subject question types, true/false, case sensitivity, exact MCMA, rotating tokens without disconnect, exit/timeout/logout collection, isolated confirmed retake deletion, makeup, student/teacher single-use recovery and session revocation.');
+{
+// Rotating entry code never becomes an attempt credential; device/session binding survives rotation.
+await loginCard(ownerCard);
+const securityWindow={start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()};
+const securityExam=await call('retake',{id:fa.id,confirmDelete:true,...securityWindow});
+const rotating=await call('viewShared',{examId:securityExam.examId});assert.equal(rotating.expiresAt%900000,0);assert.equal(rotating.token,(await call('viewShared',{examId:securityExam.examId})).token);
+await loginCard(cardsById[mp[1].id]);const securityToken=(await call('studentLaunch',{examId:securityExam.examId,code:rotating.token})).token;
+const securityAttempt=await call('enter',{token:securityToken});assert.equal(securityAttempt.exam.browserGuard,true);
+await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400);
+assert.equal((await call('heartbeat',{token:securityToken})).status,'Mengerjakan');
+await call('heartbeat',{token:securityToken,session:'99999999-9999-4999-a999-999999999999'},400);
+const originalNow=Date.now;Date.now=()=>rotating.expiresAt+1;
+await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400);
+await loginCard(ownerCard);const rotated=await call('viewShared',{examId:securityExam.examId});assert.notEqual(rotated.token,rotating.token);Date.now=originalNow;
+await loginCard(cardsById[mp[1].id]);
+const locked=await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co'}});assert.equal(locked.securityLocked,true);assert.equal(locked.answers['meet-written'],'Co');assert(locked.pausedAt);
+await call('enter',{token:securityToken},400);await call('answer',{token:securityToken,questionId:'meet-written',value:'changed'},400);
+assert.equal((await call('heartbeat',{token:securityToken})).securityLocked,true);
+await call('securityLock',{token:securityToken,session:'99999999-9999-4999-a999-999999999999'},400);
+await loginCard(ownerCard);await call('releaseSession',{id:locked.id,reason:'Verified student device'});
+await loginCard(cardsById[mp[1].id]);const unlocked=await call('enter',{token:securityToken});assert.equal(unlocked.securityLocked,false);assert(!unlocked.pausedAt);assert.equal(unlocked.answers['meet-written'],'Co');
+console.log('PASS: fifteen-minute server token expiry, bound active sessions, second-device denial, browser violation lock, saved answer, proctor-only unlock and resume.');
+
+}
