@@ -21,7 +21,7 @@ const records=async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(
 const writeRecord=async(key,kind,data)=>sql.prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=records.version+1').run(key,kind,JSON.stringify(data));
 const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8')),{record,records,writeRecord,authDB:()=>DB,...pw,...vault,env:{TOKEN_VAULT_KEY:'ab'.repeat(32)}});
 const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{DB},getChatGPTUser:async()=>null,...pw});
-const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{...authlib,...pw,...model});
+const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
 const routes=evaluate(source,{env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32)},actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
@@ -99,8 +99,8 @@ await call('saveBank',{data:{title:'Soal ASAS',topic:'ASAS 2026',unit:'SD',grade
 assert.equal(policy.keywordScore(isian,'lingkaran'),10);assert.equal(policy.keywordScore(isian,'lingkarannya'),0);
 user={email:'qa@example.test',displayName:'QA Admin'};
 await call('saveStudent',{data:{name:'Siswa Uji',nis:'000999',unit:'SD',className:'5A',year:'2026/2027',gender:'L'}});
-review=await state();const pupil=review.students.find(s=>s.nis==='000999');const card=(await call('accountCards',{kind:'student',id:pupil.id})).cards[0];assert(card.username.includes('000999'));assert(card.password.length>=12);assert.equal((await call('accountCards',{kind:'student',id:pupil.id})).cards[0].password,card.password);
-const tk=(await call('generate',{examId:reviewExams[0].id})).issued[0].token;assert.equal(tk.length,10);await call('enter',{token:tk,identityConfirmed:false},400);const attempt=await call('enter',{token:tk});assert(!JSON.stringify(attempt.questions).includes('keywords'));await call('submit',{token:tk},400);
+review=await state();const pupil=review.students.find(s=>s.nis==='000999');const card=(await call('accountCards',{kind:'student',id:pupil.id})).cards[0];assert(card.username.includes('000999'));assert.match(card.password,/^00999[a-z]{3}$/);assert.equal(card.username,'000999');assert.equal((await call('accountCards',{kind:'student',id:pupil.id})).cards[0].password,card.password);
+const tk=(await call('generate',{examId:reviewExams[0].id})).issued[0].token;assert.equal(tk.length,5);await call('enter',{token:tk,identityConfirmed:false},400);const attempt=await call('enter',{token:tk});assert(!JSON.stringify(attempt.questions).includes('keywords'));await call('submit',{token:tk},400);
 sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(attempt.id);await call('submit',{token:tk},400);
 await call('answer',{token:tk,questionId:'cx',value:'0',flags:[]});await call('answer',{token:tk,questionId:'written1',value:'lingkaran',flags:['written1']});await call('submit',{token:tk},400);
 await call('answer',{token:tk,questionId:'written1',value:'lingkaran',flags:[]});await call('submit',{token:tk});
@@ -318,4 +318,19 @@ await loginCard(ownerCard);await call('releaseSession',{id:locked.id,reason:'Ver
 await loginCard(cardsById[mp[1].id]);const unlocked=await call('enter',{token:securityToken});assert.equal(unlocked.securityLocked,false);assert(!unlocked.pausedAt);assert.equal(unlocked.answers['meet-written'],'Co');
 console.log('PASS: fifteen-minute server token expiry, bound active sessions, second-device denial, browser violation lock, saved answer, proctor-only unlock and resume.');
 
+}
+
+{
+assert.match(generated.standardPassword('202612345'),/^12345[a-z]{3}$/);
+assert.match(generated.standardPassword('123'),/^123[0-9]{2}[a-z]{3}$/);
+assert.match(generated.standardPassword(''),/^[0-9]{5}[a-z]{3}$/);
+assert.match(generated.standardPassword('00001'),/^00001[a-z]{3}$/);
+await loginCard(ownerCard);
+const proposed=await (await authCall('suggestCredential',{staffId:roleAdmin.id})).json();assert.match(proposed.password,/^[0-9]{5}[a-z]{3}$/);
+await authCall('setCredential',{staffId:roleAdmin.id,username:adminCard.username,password:'12345abc'});
+await loginCard({...adminCard,password:'12345abc'});
+await authCall('changePassword',{currentPassword:'12345abc',password:'1234567'},400);
+await authCall('changePassword',{currentPassword:'12345abc',password:'54321xyz'});
+await loginCard({...adminCard,password:'54321xyz'});
+console.log('PASS: eight-character passwords, NIS tail, random numeric padding, no-ID fallback, administrator suggestion, eight-character login/change and seven-character rejection.');
 }
