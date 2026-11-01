@@ -1,0 +1,12 @@
+'use client';
+import React,{useState} from 'react';
+const pad=(n:number)=>String(n).padStart(2,'0');
+export default function DateTimeField({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}){
+ const [open,O]=useState(false),[month,M]=useState('');
+ const date=value?.slice(0,10)||new Date(Date.now()+7*3600000).toISOString().slice(0,10),time=value?.slice(11,16)||'08:00';
+ const [year,mon]=(month||date.slice(0,7)).split('-').map(Number);
+ const first=new Date(Date.UTC(year,mon-1,1)).getUTCDay(),days=new Date(Date.UTC(year,mon,0)).getUTCDate();
+ const shift=(n:number)=>{const d=new Date(Date.UTC(year,mon-1+n,1));M(d.getUTCFullYear()+'-'+pad(d.getUTCMonth()+1))};
+ const title=new Date(Date.UTC(year,mon-1,1)).toLocaleDateString('id-ID',{month:'long',year:'numeric',timeZone:'UTC'});
+ return <div className="date-time-field"><label className="field"><span>{label}</span><input type="datetime-local" value={value||''} onInput={e=>onChange(e.currentTarget.value)} onChange={e=>onChange(e.target.value)} onClick={()=>{M(date.slice(0,7));O(true)}} aria-expanded={open}/></label>{open&&<section className="date-time-picker" aria-label={'Pilih '+label}><div className="calendar-heading"><button type="button" aria-label="Bulan sebelumnya" onClick={()=>shift(-1)}>‹</button><strong>{title}</strong><button type="button" aria-label="Bulan berikutnya" onClick={()=>shift(1)}>›</button></div><div className="calendar-grid">{['Min','Sen','Sel','Rab','Kam','Jum','Sab'].map(d=><small key={d}>{d}</small>)}{Array.from({length:first},(_,i)=><span key={'blank'+i}/>)}{Array.from({length:days},(_,i)=>{const d=year+'-'+pad(mon)+'-'+pad(i+1);return <button key={d} type="button" className={d===date?'primary':''} aria-label={'Tanggal '+(i+1)+' '+title} aria-pressed={d===date} onClick={()=>onChange(d+'T'+time)}>{i+1}</button>})}</div><div className="calendar-time"><label>Jam WIB<select aria-label={'Jam '+label} value={time.slice(0,2)} onChange={e=>onChange(date+'T'+e.target.value+':'+time.slice(3,5))}>{Array.from({length:24},(_,i)=><option key={i}>{pad(i)}</option>)}</select></label><label>Menit<select aria-label={'Menit '+label} value={time.slice(3,5)} onChange={e=>onChange(date+'T'+time.slice(0,2)+':'+e.target.value)}>{Array.from({length:60},(_,i)=><option key={i}>{pad(i)}</option>)}</select></label><button type="button" onClick={()=>O(false)}>Selesai memilih</button></div></section>}</div>;
+}

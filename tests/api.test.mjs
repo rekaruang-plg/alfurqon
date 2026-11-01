@@ -46,7 +46,7 @@ const csrf=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POS
 assert.equal(data.subjects.length,32);
 assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
 await call('prepareUpdate');await call('prepareUpdate');assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
-await call('saveSubject',{data:{name:'Seni Budaya',unit:'SD'}});await call('saveSubject',{data:{name:'seni budaya',unit:'SD'}});
+await call('saveSubject',{data:{name:'Seni Budaya',unit:'SD',grades:['5','6']}});await call('saveSubject',{data:{name:'seni budaya',unit:'SD',grades:['5','6']}});
 await call('saveBank',{data:{title:'Invalid',unit:'SD',subject:'Tidak terdaftar',questions:bank.questions}},400);
 await call('saveStaff',{data:{email:'invalid@example.test',name:'X',role:'Guru',unit:'SD',subject:'Tidak terdaftar'}},400);
 const tokens=(await call('listTokens',{examId:exam.id})).issued;assert.equal(tokens[0].token,token);assert.equal((await call('listTokens',{examId:exam.id})).issued[0].token,token);
@@ -176,7 +176,7 @@ const frozenBank=(await state()).banks.find(b=>b.examIds?.includes(revExam.id));
 await call('saveBank',{data:{...frozenBank,questions:frozenBank.questions.map(q=>({...q,text:q.text+' revisi isi'}))}});
 assert.equal(sql.prepare('SELECT data FROM records WHERE id=?').get('snapshot-'+revExam.id).data,frozenBefore);const altered=(await state()).banks.find(b=>b.id===frozenBank.id);assert.notEqual(altered.questions[0].sourceId,frozenBank.questions[0].sourceId);assert(!(await state()).exams.find(e=>e.id===revExam.id).questionSources.includes(altered.questions[0].sourceId));
 await call('saveExam',{data:{title:'Mapel diganti',unit:'SD',className:'6B',grade:'6',subject:'IPAS',bankId:bank.id,duration:30,start:new Date().toISOString(),end:new Date(Date.now()+1800000).toISOString()}});const corrected=(await state()).exams.find(e=>e.title==='Mapel diganti');assert.equal(corrected.subject,'IPAS');assert.equal(corrected.bankId,'');
-await call('saveSubject',{data:{name:'Mapel revisi',unit:'SD'}});const custom=(await state()).subjects.find(s=>s.name==='Mapel revisi');await call('saveSubject',{data:{...custom,name:'Mapel baru',grades:['6']}});assert((await state()).subjects.some(s=>s.id===custom.id&&s.name==='Mapel baru'));
+await call('saveSubject',{data:{name:'Mapel revisi',unit:'SD',grades:['5','6']}});const custom=(await state()).subjects.find(s=>s.name==='Mapel revisi');await call('saveSubject',{data:{...custom,name:'Mapel baru',grades:['6']}});assert((await state()).subjects.some(s=>s.id===custom.id&&s.name==='Mapel baru'));
 user={email:'admin@example.test',displayName:'Admin SMP'};await call('deleteMaster',{kind:'subject',id:custom.id},400);user={email:bareTeacher.email,displayName:'Teacher'};await call('deleteMaster',{kind:'student',id:newPupil.id},400);user={email:'qa@example.test',displayName:'QA Admin'};
 await call('deleteMaster',{kind:'subject',id:custom.id});assert(!(await state()).subjects.some(s=>s.id===custom.id));
 const populatedClass=(await state({year:'2028/2029',semester:1})).classes.find(c=>c.name==='6N');await call('deleteMaster',{kind:'class',id:populatedClass.id},400);
@@ -275,7 +275,7 @@ await loginCard(ownerCard);
 const meetingPeriod={year:'2035/2036',semester:1};await call('saveYear',{data:{name:meetingPeriod.year}});
 await call('saveClass',{period:meetingPeriod,data:{name:'6 MEETING',grade:'6',unit:'SD',year:meetingPeriod.year}});
 for(let i=0;i<3;i++)await call('saveStudent',{period:meetingPeriod,data:{name:'Meeting '+i,nis:'MEET'+i,unit:'SD',className:'6 MEETING',gender:'L',year:meetingPeriod.year}});
-await call('saveSubject',{period:meetingPeriod,data:{name:'Meeting Science',unit:'SD',questionTypes:['PG','PG_KOMPLEKS','ISIAN','URAIAN','BENAR_SALAH']}});
+await call('saveSubject',{period:meetingPeriod,data:{name:'Meeting Science',unit:'SD',grades:['6'],questionTypes:['PG','PG_KOMPLEKS','ISIAN','URAIAN','BENAR_SALAH']}});
 let ms=await state(meetingPeriod);const mp=ms.students.filter(s=>s.className==='6 MEETING');assert.equal(mp.length,3);
 await call('saveExam',{period:meetingPeriod,data:{title:'Meeting exam',unit:'SD',className:'6 MEETING',grade:'6',subject:'Meeting Science',duration:60,start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()}});
 let me=(await state(meetingPeriod)).exams.find(e=>e.title==='Meeting exam');
@@ -333,4 +333,26 @@ await authCall('changePassword',{currentPassword:'12345abc',password:'1234567'},
 await authCall('changePassword',{currentPassword:'12345abc',password:'54321xyz'});
 await loginCard({...adminCard,password:'54321xyz'});
 console.log('PASS: eight-character passwords, NIS tail, random numeric padding, no-ID fallback, administrator suggestion, eight-character login/change and seven-character rejection.');
+}
+// Evaluation: individual teacher classes, role-specific account data, required subject levels.
+{
+await loginCard(ownerCard);
+const period={year:'2026/2027',semester:1};
+await call('saveStaff',{period,data:{name:'Evaluasi Guru',niy:'EVAL.2026.123',role:'Guru',unit:'SD',assignments:[{unit:'SD',subject:'Matematika',classes:['5A']}]}});
+let st=await state(period);const teacher=st.staffList.find(t=>t.niy==='EVAL.2026.123');assert.deepEqual(teacher.assignments[0].classes,['5A']);
+await call('saveStaff',{period,data:{...teacher,assignments:[{unit:'SD',subject:'Matematika',classes:['__NONE__']}] }},400);
+const teacherCard=(await call('accountCards',{period,kind:'teacher',id:teacher.id})).cards[0];assert.equal(teacherCard.kind,'teacher');assert.equal(teacherCard.niy,teacher.niy);assert.match(teacherCard.teaching,/Matematika — 5A/);
+const studentCard=(await call('accountCards',{period,kind:'student',id:pupil.id})).cards[0];assert.equal(studentCard.kind,'student');assert.equal(studentCard.nis,pupil.nis);
+await call('saveSubject',{period,data:{name:'Evaluasi kosong',unit:'SD',grades:[]}},400);
+await call('saveSubject',{period,data:{name:'Evaluasi kosong',unit:'SD'}},400);
+await call('saveSubject',{period,data:{name:'Evaluasi tingkat',unit:'SD',grades:['5','6']}});
+assert.deepEqual((await state(period)).subjects.find(m=>m.name==='Evaluasi tingkat').grades,['5','6']);
+await call('saveExam',{period,data:{title:'Evaluasi edit kelas',unit:'SD',classes:['5A'],subject:'Matematika',grade:'5',duration:60,start:'2031-05-01T01:00:00Z',end:'2031-05-01T02:00:00Z'}});
+const editExam=(await state(period)).exams.find(e=>e.title==='Evaluasi edit kelas');
+await call('saveExam',{period,data:{...editExam,classes:['5B']}},400);
+await call('saveExam',{period,data:{...editExam,classes:['5A'],duration:90,end:'2031-05-01T02:30:00Z'}});
+assert.equal((await state(period)).exams.find(e=>e.id===editExam.id).duration,90);
+await loginCard(teacherCard);let scoped=await state(period);assert(scoped.classes.some(c=>c.name==='5A'));assert(!scoped.classes.some(c=>c.name==='5B'));
+await loginCard(ownerCard);
+console.log('PASS: evaluation teacher assignment persistence/access scope, teacher/student card identity, mandatory subject levels, same-class schedule edit.');
 }
