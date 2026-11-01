@@ -3,7 +3,7 @@ import {generatedAccount} from '../../../lib/generated-account';
 import {submissionIssue,written} from '../../../lib/review-policy';
 import { env } from 'cloudflare:workers';
 import { staffActor as actor, records as authRecords } from '../../../lib/staff-auth';
-import { starterQuestions,shuffle,mark,choiceSet, type Question } from '../../../lib/model';
+import { starterQuestions,uniqueQuestionOrder,mark,choiceSet, type Question } from '../../../lib/model';
 import { subjectCatalog,sampleQuestions } from '../../../lib/simulations';
 import { sealToken,openToken } from '../../../lib/token-vault';
 export const dynamic='force-dynamic';
@@ -76,6 +76,22 @@ function sanitizeQ(q:any):Question{if(q.format==='BENAR_SALAH'&&(q.type!=='PG'||
 async function freezeExam(e:any){const key='snapshot-'+e.id;let snapshot=await get(key);if(snapshot)return snapshot;const existing:any=await db().prepare('SELECT data FROM attempts WHERE exam_id=? AND json_extract(data,?) IS NOT NULL LIMIT 1').bind(e.id,'$.startedAt').first();const prior=existing?JSON.parse(existing.data):null;const bank=await get(e.bankId);const questions=prior?.questions||bank?.questions;if(!questions?.length)fail('Paket soal kosong.');await db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind(key,'snapshot',JSON.stringify({questions,bankId:e.bankId,at:Date.now()})).run();return await get(key);}
 async function attemptByToken(token:string){if(typeof token!=='string'||token.length<5||token.length>80)fail('Token tidak valid.');const tokenHash=await hash(token.trim().toUpperCase());let r:any=await db().prepare('SELECT * FROM attempts WHERE token_hash=?').bind(tokenHash).first();if(!r){const alias=await get('token-session-'+tokenHash);if(alias&&typeof requestBody?.session==='string'&&alias.sessionHash===await hash(requestBody.session)){const prior:any=await db().prepare('SELECT * FROM attempts WHERE id=?').bind(alias.attemptId).first();if(prior&&JSON.parse(prior.data).sessionHash===alias.sessionHash)r=prior;}}if(!r)fail('Token tidak ditemukan. Periksa kartu ujian Anda.');return {...r,...JSON.parse(r.data)}}
 async function saveAttempt(a:any){const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;const r=await db().prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=? AND version=?').bind(JSON.stringify(rest),a.id,version).run();if(!r.meta.changes)fail('Jawaban sedang diperbarui. Coba kembali.');a.version++}
+async function startWithUniqueOrder(a:any,questions:Question[]){
+ for(let retry=0;retry<40;retry++){
+  const rows=(await db().prepare("SELECT id, json_extract(data,'$.questionOrder') AS ordering, json_extract(data,'$.questions') AS questions FROM attempts WHERE exam_id=? AND id<>? AND json_array_length(data,'$.questions')>0").bind(a.examId,a.id).all()).results as any[];
+  const used=rows.map(row=>row.ordering||JSON.stringify(JSON.parse(row.questions).map((q:any)=>q.id)));
+  const choice=uniqueQuestionOrder(questions,used);a.questions=choice.questions;a.questionOrder=choice.signature;a.orderSpaceExhausted=!choice.unique;
+  const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;
+  // A single database statement arbitrates simultaneous starts, including legacy attempts.
+  const guard=choice.unique?" AND NOT EXISTS (SELECT 1 FROM attempts AS other WHERE other.exam_id=? AND other.id<>? AND (json_extract(other.data,'$.questionOrder')=? OR (json_extract(other.data,'$.questionOrder') IS NULL AND (SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(other.data,'$.questions'))=?)))":"";
+  const args:any[]=[JSON.stringify(rest),a.id,version];if(choice.unique)args.push(a.examId,a.id,choice.signature,choice.signature);
+  const result=await db().prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=? AND version=?'+guard).bind(...args).run();
+  if(result.meta.changes){a.version++;return;}
+  const current:any=await db().prepare('SELECT version FROM attempts WHERE id=?').bind(a.id).first();
+  if(!current||current.version!==version)fail('Sesi ujian sedang diperbarui. Coba masuk kembali.');
+ }
+ fail('Banyak siswa sedang mulai bersamaan. Silakan tekan mulai kembali; jawaban tetap aman.');
+}
 function teaches(staff:any,x:any){if(staff.role!=='Guru')return true;const tasks=staff.assignments?.length?staff.assignments:[{unit:staff.unit,subject:staff.subject,classes:[]}];return tasks.some((t:any)=>t.unit===x.unit&&t.subject===x.subject&&(!x.className||!t.classes?.length||t.classes.includes(x.className)));}
 function publicAttempt(a:any,exam:any,student:any){return {id:a.id,student:{name:student.name,nis:student.nis,unit:student.unit,className:student.className},exam:{title:exam.title,subject:exam.subject,duration:exam.duration,start:exam.start,end:exam.end,strictExit:!!a.strictExit,browserGuard:!!a.browserGuard,instructions:exam.instructions||'Periksa jawaban sebelum mengumpulkan. Hubungi pengawas bila mengalami kendala.'},status:a.status,securityLocked:!!a.securityLocked,securityReason:a.securityReason,pausedAt:a.pausedAt,remainingMs:a.remainingMs,startedAt:a.startedAt,submitAfter:a.submitAfter,deadline:a.deadline,lastSavedAt:a.lastSavedAt,answers:a.answers||{},flags:a.flags||[],questions:(a.questions||[]).map(({key,keywords,...q}:Question)=>q),published:!!a.published,score:a.published?a.score:null,serverNow:Date.now()}}
 function relatedClass(staff:any,c:any){return staff.role!=='Guru'||c.homeroomId===staff.id||(staff.assignments||[]).some((t:any)=>t.unit===c.unit&&(!t.classes?.length||t.classes.includes(c.name)));}
@@ -116,7 +132,7 @@ if(['preview','enter','answer','submit','exitExam','securityLock','heartbeat','t
  if(a.pausedAt&&b.action==='exitExam')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
  if(a.pausedAt&&b.action!=='enter')fail('Sesi dijeda oleh pengawas. Masuk ulang untuk melanjutkan.');
  if(b.action==='enter'&&a.status==='Belum mulai'){
- if(exam.status!=='Aktif'||Date.now()<Date.parse(exam.start)||Date.now()>=Date.parse(exam.end))fail('Ujian belum dibuka atau jadwal sudah berakhir.');const snapshot=await freezeExam(exam);if(!snapshot?.questions.length)fail('Paket soal belum siap.');a.questions=shuffle(snapshot.questions);a.answers={};a.flags=[];a.status='Mengerjakan';a.startedAt=Date.now();a.strictExit=!exam.simulation;a.browserGuard=!exam.simulation;a.lastSeenAt=Date.now();a.deadline=Math.min(Date.now()+exam.duration*60000,Date.parse(exam.end));a.submitAfter=Math.min(a.startedAt+exam.duration*60000/4,a.deadline);await saveAttempt(a);
+ if(exam.status!=='Aktif'||Date.now()<Date.parse(exam.start)||Date.now()>=Date.parse(exam.end))fail('Ujian belum dibuka atau jadwal sudah berakhir.');const snapshot=await freezeExam(exam);if(!snapshot?.questions.length)fail('Paket soal belum siap.');a.answers={};a.flags=[];a.status='Mengerjakan';a.startedAt=Date.now();a.strictExit=!exam.simulation;a.browserGuard=!exam.simulation;a.lastSeenAt=Date.now();a.deadline=Math.min(Date.now()+exam.duration*60000,Date.parse(exam.end));a.submitAfter=Math.min(a.startedAt+exam.duration*60000/4,a.deadline);await startWithUniqueOrder(a,snapshot.questions);
  }
  if(b.action!=='enter'&&a.status==='Belum mulai')fail('Mulai ujian terlebih dahulu.');
  if(a.status==='Mengerjakan'){
