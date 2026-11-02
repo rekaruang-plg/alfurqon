@@ -11,6 +11,7 @@ function evaluate(source,vars){const js=ts.transpileModule(source,{compilerOptio
 const strip=s=>s.replace(/^import .*;\n/gm,'');
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
 const settings=evaluate(fs.readFileSync('lib/question-settings.ts','utf8'),{});
+const sdProfiles=evaluate(strip(fs.readFileSync('lib/sd-subject-profiles.ts','utf8')),settings);
 const model=evaluate(strip(fs.readFileSync('lib/model.ts','utf8')),policy);
 const source=fs.readFileSync('app/api/cbt/route.ts','utf8').replace(/^import .*;\n/gm,'');
 const simulation=evaluate(fs.readFileSync('lib/simulations.ts','utf8').replace(/^import .*;\n/gm,''),{});
@@ -23,7 +24,7 @@ const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8'
 const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{DB},getChatGPTUser:async()=>null,...pw});
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
-const routes=evaluate(source,{env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32)},actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...settings,...model,...simulation,...vault,...policy,...generated});
+const routes=evaluate(source,{env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32)},actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
 assert.equal((await state()).needsSetup,true);await call('setup');await call('setup',{},400);
@@ -43,7 +44,7 @@ user={...user,email:'qa@example.test'};
 await call('saveExam',{data:{title:'Bentrok',unit:'SD',className:'6A',bankId:bank.id,duration:60,start:exam.start,end:exam.end}},400);
 const csrf=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{origin:'https://other.test'},body:'{"action":"setup"}'}));assert.equal(csrf.status,400);
 // New revision: master subjects, checkbox grading and repeatable token retrieval.
-assert.equal(data.subjects.length,32);
+assert.equal(data.subjects.length,34);
 assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
 await call('prepareUpdate');await call('prepareUpdate');assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
 await call('saveSubject',{data:{name:'Seni Budaya',unit:'SD',grades:['5','6']}});await call('saveSubject',{data:{name:'seni budaya',unit:'SD',grades:['5','6']}});
@@ -394,4 +395,27 @@ await call('saveSubject',{period,data:{...subject,questionTypes:['PG']}});
 await call('saveSubject',{period,data:{name:'Evaluasi duplicate',unit:'SD',grades:['5']}});
 subject=(await state(period)).subjects.find(s=>s.name==='Evaluasi duplicate');assert(subject.questionTypes.includes('URAIAN'));
 console.log('PASS: evaluation 3 teacher NIY edit preserves login/password, cross-unit assignment rejected, repeated subject saves update types.');
+}
+
+// SD subject profiles, non-destructive master migration and package-scoped extensions.
+{
+await loginCard(ownerCard);const period={year:'2026/2027',semester:1};let st=await state(period);
+for(const name of ['TIK','SBDP']){const sub=st.subjects.find(s=>s.unit==='SD'&&s.name===name);assert(sub);assert(sub.grades.includes('5')&&sub.grades.includes('6'));}
+const arab=st.subjects.find(s=>s.unit==='SD'&&s.name==='Bahasa Arab');assert.deepEqual(arab.questionTypes,['PG','PG_KOMPLEKS','ISIAN','URAIAN']);
+const ind=st.subjects.find(s=>s.unit==='SD'&&s.name==='Bahasa Indonesia');assert(ind.questionTypes.includes('BENAR_SALAH'));assert(!ind.questionTypes.includes('MENJODOHKAN'));
+const unchanged=st.subjects.find(s=>s.unit==='SMP'&&s.name==='Matematika');const sdCount=st.subjects.filter(s=>s.unit==='SD').length;await state(period);assert.equal((await state(period)).subjects.filter(s=>s.unit==='SD').length,sdCount);
+const q={id:'sd-match',type:'MENJODOHKAN',text:'Pasangkan angka.',left:['Satu','Dua'],right:['1','2'],key:'0,1',options:[],points:4,mode:'TEKS'};
+await call('saveBank',{period,data:{title:'SD extra without opt-in',unit:'SD',subject:'Bahasa Arab',grade:'5',questions:[q]}},400);
+await call('saveBank',{period,data:{title:'SD extra type',unit:'SD',subject:'Bahasa Arab',grade:'5',questions:[q],additionalQuestionTypes:['MENJODOHKAN']}});
+let saved=(await state(period)).banks.find(b=>b.title==='SD extra type');assert.deepEqual(saved.additionalQuestionTypes,['MENJODOHKAN']);assert.equal(saved.questions[0].type,'MENJODOHKAN');
+assert.deepEqual((await state(period)).subjects.find(s=>s.id===arab.id).questionTypes,arab.questionTypes);
+await call('saveBank',{period,data:{...saved,additionalQuestionTypes:['INVALID']}},400);
+await call('saveBank',{period,data:{...saved,grade:'6',additionalQuestionTypes:['MENJODOHKAN']}});
+await call('saveSubject',{period,data:{...arab,questionTypes:['PG','URAIAN']}});await state(period);assert.deepEqual((await state(period)).subjects.find(s=>s.id===arab.id).questionTypes,['PG','URAIAN']);
+assert.deepEqual((await state(period)).subjects.find(s=>s.id===unchanged.id),unchanged);
+const teacher=(await state(period)).staffList.find(t=>t.niy==='EVAL.2026.999');const card=(await call('accountCards',{period,kind:'teacher',id:teacher.id})).cards[0];await loginCard(card);
+await call('saveBank',{period,data:{title:'Teacher SD extra',unit:'SD',subject:'Matematika',grade:'5',questions:[q],additionalQuestionTypes:['MENJODOHKAN']}});
+await call('saveBank',{period,data:{title:'Teacher forbidden unit',unit:'SMP',subject:'Matematika',grade:'1',questions:[q],additionalQuestionTypes:['MENJODOHKAN']}},400);
+await loginCard(ownerCard);
+console.log('PASS: SD masters cover grades 5/6, B/S defaults, repeated migration and later customization preserved, package-only type extensions, teacher permission and cross-unit denial.');
 }
