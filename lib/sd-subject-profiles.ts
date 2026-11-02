@@ -26,7 +26,22 @@ export const sdSubjectProfiles=[
  {name:'IPAS',aliases:['Ilmu Pengetahuan Alam dan Sosial'],types:base,variants:['pg_image','pg','mcma','short','essay_image','essay'],mode:'TEKS'},
  {name:'SBDP',aliases:['SBdP','Seni Budaya','Seni Budaya dan Prakarya'],types:base,variants:['pg','pg_image','mcma','short','essay'],mode:'TEKS'}
 ];
+const smpBase=['PG','PG_KOMPLEKS','BENAR_SALAH','URAIAN'];
+export const smpSubjectProfiles=[
+ {name:'Pendidikan Agama Islam',aliases:['PAI','Pendidikan Agama Islam dan Budi Pekerti'],types:smpBase,variants:['pg','pg_passage','mcma','true_false','essay'],mode:'TEKS'},
+ {name:'Pendidikan Pancasila',aliases:['PPKn','PKN'],types:smpBase,variants:['pg','pg_passage','mcma','true_false','essay'],mode:'TEKS'},
+ {name:'IPS',aliases:['Ilmu Pengetahuan Sosial'],types:smpBase,variants:['pg','pg_image','pg_passage','mcma_data','true_false','essay','essay_image'],mode:'TEKS'},
+ {name:'Seni Budaya',aliases:['Seni Budaya dan Prakarya','SBDP'],types:smpBase,variants:['pg','pg_image','mcma','true_false','essay','essay_image'],mode:'TEKS'},
+ {name:'Bahasa Inggris',aliases:[],types:smpBase,variants:['pg','pg_passage','mcma','true_false','essay_passage','essay'],mode:'TEKS'},
+ {name:'Informatika',aliases:['TIK','Komputer','Teknologi Informasi dan Komunikasi'],types:smpBase,variants:['pg','pg_image','mcma','true_false','essay','essay_image'],mode:'TEKS'},
+ {name:'Matematika',aliases:['MTK'],types:smpBase,variants:['pg','pg_image','pg_passage','mcma_data','true_false','essay_image','essay'],mode:'MATEMATIKA'},
+ {name:'Bahasa Indonesia',aliases:[],types:smpBase,variants:['pg','pg_passage','mcma','true_false','essay_passage','essay'],mode:'TEKS'},
+ {name:'PJOK',aliases:['Pendidikan Jasmani Olahraga dan Kesehatan'],types:smpBase,variants:['pg','pg_image','mcma','true_false','essay'],mode:'TEKS'},
+ {name:'Bahasa Arab',aliases:[],types:['PG','PG_KOMPLEKS','URAIAN'],variants:['pg','pg_image','pg_passage','mcma','essay','essay_complete'],mode:'ARAB'}
+];
+export function smpProfile(unit:string,name:string,grade?:string){if(unit!=='SMP'||grade&&!['1','2','3'].includes(String(grade)))return undefined;return smpSubjectProfiles.find(p=>[p.name,...p.aliases].some(n=>normal(n)===normal(name)));}
+export function subjectProfile(unit:string,name:string,grade?:string){return sdProfile(unit,name,grade)||smpProfile(unit,name,grade);}
 const normal=(s:string)=>String(s||'').trim().toLowerCase();
 export function sdProfile(unit:string,name:string,grade?:string){if(unit!=='SD'||grade&&!['5','6'].includes(String(grade)))return undefined;return sdSubjectProfiles.find(p=>[p.name,...p.aliases].some(n=>normal(n)===normal(name)));}
-export function presentationsFor(unit:string,name:string,grade?:string){return (sdProfile(unit,name,grade)?.variants||[]).map(id=>variants[id]);}
+export function presentationsFor(unit:string,name:string,grade?:string){return (subjectProfile(unit,name,grade)?.variants||[]).map(id=>variants[id]);}
 export function packageQuestionTypes(subject:any,extra:string[]=[],questions:any[]=[]){return [...new Set([...(subject?.questionTypes||Object.keys(questionTypeLabels)),...extra,...questions.map(q=>q.format||q.type)])].filter(t=>!!questionTypeLabels[t]);}

@@ -1,4 +1,4 @@
-import {sdSubjectProfiles} from '../../../lib/sd-subject-profiles';
+import {sdSubjectProfiles,smpSubjectProfiles} from '../../../lib/sd-subject-profiles';
 import {questionTypeLabels} from '../../../lib/question-settings';
 import {generatedAccount} from '../../../lib/generated-account';
 import {submissionIssue,written} from '../../../lib/review-policy';
@@ -76,6 +76,20 @@ async function ensureSdSubjects(){
  }}
  writes.push(db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind(marker,'config',JSON.stringify({ready:true})));await db().batch(writes);
 }
+async function ensureSmpSubjects(){
+ const marker='smp-subject-profiles-20261102:'+(period.semester===2?period.year+':2':'base');if(await rawGet(marker))return;
+ const subjects=await all('subject'),writes=[];
+ for(const profile of smpSubjectProfiles){
+ const aliases=[profile.name,...profile.aliases].map(n=>n.toLowerCase());const existing=subjects.filter((x:any)=>x.unit==='SMP'&&aliases.includes(x.name.trim().toLowerCase()));
+ for(const prior of existing.length?existing:[null]){
+ const key=prior?.id||'subject-'+await hash('SMP:'+profile.name.toLowerCase());
+ const value={...prior,id:key,name:prior?.name||profile.name,unit:'SMP',grades:[...new Set([...(prior?.grades||[]),'1','2','3'])],questionTypes:profile.types,smpProfile:profile.name};delete value.version;
+ const target=period.semester===2?profileKey(key):key,kind=period.semester===2?'academic_profile':'subject';
+ if(period.semester===2){value.profileKind='subject';value.profileYear=period.year;writes.push(db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind(key,'subject',JSON.stringify({...value,semester2Only:true})));}
+ writes.push(db().prepare('INSERT INTO records(id,kind,data) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM records WHERE id=?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=records.version+1').bind(target,kind,JSON.stringify({...value,id:target}),marker));
+ }}
+ writes.push(db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind(marker,'config',JSON.stringify({ready:true})));await db().batch(writes);
+}
 async function ensureCatalog(){
 const names:Record<string,Set<string>>=Object.fromEntries(Object.entries(subjectCatalog).map(([u,ns])=>[u,new Set(ns)]));
 for(const old of [...await all('bank'),...await all('staff')])if(names[old.unit]&&old.subject)names[old.unit].add(old.subject);
@@ -120,7 +134,7 @@ async function studentOverview(studentId:string){
  return Response.json({student,studentPortal:true,demo,exams:schedules,attempts:mine.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
 }
 async function GET(req:Request){try{
- const authenticated=await actor(req);const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');await ensureMasters();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SD')await ensureSdSubjects();
+ const authenticated=await actor(req);const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');await ensureMasters();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SD')await ensureSdSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMP')await ensureSmpSubjects();
  const [students,exams,banks,people,logs,classes,subjects,topics]=await Promise.all(['student','exam','bank','staff','audit','class','subject','topic'].map(all));
  if(staff.role==='Siswa')return studentOverview(staff.studentId);
  const scope=(x:any)=>staff.role==='Super Admin'||x.unit===staff.unit||(staff.role==='Guru'&&(staff.assignments||[]).some((t:any)=>t.unit===x.unit));

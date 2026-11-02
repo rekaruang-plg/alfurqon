@@ -44,7 +44,7 @@ user={...user,email:'qa@example.test'};
 await call('saveExam',{data:{title:'Bentrok',unit:'SD',className:'6A',bankId:bank.id,duration:60,start:exam.start,end:exam.end}},400);
 const csrf=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{origin:'https://other.test'},body:'{"action":"setup"}'}));assert.equal(csrf.status,400);
 // New revision: master subjects, checkbox grading and repeatable token retrieval.
-assert.equal(data.subjects.length,34);
+assert.equal(data.subjects.length,35);
 assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
 await call('prepareUpdate');await call('prepareUpdate');assert.equal((await state()).banks.filter(b=>b.simulation).length,32);
 await call('saveSubject',{data:{name:'Seni Budaya',unit:'SD',grades:['5','6']}});await call('saveSubject',{data:{name:'seni budaya',unit:'SD',grades:['5','6']}});
@@ -418,4 +418,19 @@ await call('saveBank',{period,data:{title:'Teacher SD extra',unit:'SD',subject:'
 await call('saveBank',{period,data:{title:'Teacher forbidden unit',unit:'SMP',subject:'Matematika',grade:'1',questions:[q],additionalQuestionTypes:['MENJODOHKAN']}},400);
 await loginCard(ownerCard);
 console.log('PASS: SD masters cover grades 5/6, B/S defaults, repeated migration and later customization preserved, package-only type extensions, teacher permission and cross-unit denial.');
+}
+// SMP profiles apply to every grade, without repeatedly replacing administrator settings.
+{
+await loginCard(ownerCard);const period={year:'2026/2027',semester:1};const st=await state(period);
+const names=['Pendidikan Agama Islam','Pendidikan Pancasila','IPS','Seni Budaya','Bahasa Inggris','Informatika','Matematika','Bahasa Indonesia','PJOK','Bahasa Arab'];
+for(const name of names){const sub=st.subjects.find(s=>s.unit==='SMP'&&s.name===name);assert(sub,name);assert.deepEqual(sub.grades,['1','2','3']);assert.deepEqual(sub.questionTypes,name==='Bahasa Arab'?['PG','PG_KOMPLEKS','URAIAN']:['PG','PG_KOMPLEKS','BENAR_SALAH','URAIAN']);}
+const arab=st.subjects.find(s=>s.unit==='SMP'&&s.name==='Bahasa Arab');const count=st.subjects.length;
+await state(period);assert.equal((await state(period)).subjects.length,count);
+const q={id:'smp-extra',type:'ISIAN',text:'Lengkapi kalimat.',key:'Jawaban',options:[],points:4,mode:'ARAB'};
+await call('saveBank',{period,data:{title:'SMP unselected extra',unit:'SMP',subject:'Bahasa Arab',grade:'1',questions:[q]}},400);
+for(const grade of ['1','2','3'])await call('saveBank',{period,data:{title:'SMP extra '+grade,unit:'SMP',subject:'Bahasa Arab',grade,questions:[q],additionalQuestionTypes:['ISIAN']}});
+assert.deepEqual((await state(period)).subjects.find(s=>s.id===arab.id).questionTypes,arab.questionTypes);
+await call('saveSubject',{period,data:{...arab,questionTypes:['PG','URAIAN']}});assert.deepEqual((await state(period)).subjects.find(s=>s.id===arab.id).questionTypes,['PG','URAIAN']);
+assert.deepEqual((await state(period)).subjects.filter(s=>s.unit!=='SMP'),st.subjects.filter(s=>s.unit!=='SMP'));
+console.log('PASS: ten SMP masters, grades 1/2/3, Arabic defaults, package extensions, migration idempotence, administrator edits and other units preserved.');
 }
