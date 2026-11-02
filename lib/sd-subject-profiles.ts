@@ -1,6 +1,13 @@
 import {questionTypeLabels} from './question-settings';
 export type Presentation={id:string;label:string;kind:string;hint:string};
 const variants:Record<string,Presentation>={
+ sma_text:{id:'sma_text',label:'1. Satu teks · banyak pertanyaan',kind:'PG',hint:'Tambahkan teks di Kelompok bacaan, lalu pilih 5–10 pertanyaan terkait. Bacaan ditampilkan pada setiap soal; kelompok tetap bersama saat diacak.'},
+ sma_table:{id:'sma_table',label:'2. Teks dan tabel · banyak pertanyaan',kind:'PG',hint:'Tambahkan teks dan gambar tabel di Kelompok bacaan. Pilih semua pertanyaan yang menggunakan data tersebut.'},
+ sma_labeled:{id:'sma_labeled',label:'3. Gambar berlabel · banyak pertanyaan',kind:'PG',hint:'Unggah gambar yang sudah diberi label A–E atau angka ke Kelompok bacaan dan hubungkan pertanyaannya.'},
+ sma_info:{id:'sma_info',label:'4. Infografik · banyak pertanyaan',kind:'PG',hint:'Unggah infografik, grafik atau diagram ke Kelompok bacaan. Pastikan label terbaca; gambar dapat diperbesar.'},
+ sma_mcma:{id:'sma_mcma',label:'5. Pilihan ganda kompleks · beberapa jawaban',kind:'PG_KOMPLEKS',hint:'Gunakan opsi A–E dan centang semua kunci benar. Tuliskan instruksi seperti Pilih TIGA jawaban. Poin penuh hanya jika kombinasi jawaban sama persis dengan kunci; selain itu nol.'},
+ sma_picture:{id:'sma_picture',label:'6. Pilihan jawaban berupa gambar',kind:'PG',hint:'Gunakan Letak gambar untuk mengunggah gambar ke pilihan A–E. Isi 4–5 pilihan dan tandai satu kunci.'},
+ sma_match:{id:'sma_match',label:'7. Menjodohkan gambar dan pernyataan',kind:'MENJODOHKAN',hint:'Isi satu butir per baris. Gunakan Letak gambar untuk menambahkan gambar ke kiri atau kanan. Siswa melihat pilihan berlabel A–E dan memilih pasangan untuk setiap butir.'},
  pg:{id:'pg',label:'Pilihan ganda · teks langsung',kind:'PG',hint:'Tuliskan pertanyaan dan pilihan jawaban. Pilih satu kunci.'},
  pg_image:{id:'pg_image',label:'Pilihan ganda · gambar',kind:'PG',hint:'Gunakan Tambah gambar pada pertanyaan atau pilihan jawaban, lalu periksa pratinjau.'},
  pg_passage:{id:'pg_passage',label:'Pilihan ganda · bacaan / tabel bersama',kind:'PG',hint:'Gunakan Kelompok bacaan untuk menghubungkan beberapa soal. Tabel dapat dilampirkan sebagai gambar pada bacaan agar bentuknya tetap terbaca.'},
@@ -40,8 +47,11 @@ export const smpSubjectProfiles=[
  {name:'Bahasa Arab',aliases:[],types:['PG','PG_KOMPLEKS','URAIAN'],variants:['pg','pg_image','pg_passage','mcma','essay','essay_complete'],mode:'ARAB'}
 ];
 export function smpProfile(unit:string,name:string,grade?:string){if(unit!=='SMP'||grade&&!['1','2','3'].includes(String(grade)))return undefined;return smpSubjectProfiles.find(p=>[p.name,...p.aliases].some(n=>normal(n)===normal(name)));}
-export function subjectProfile(unit:string,name:string,grade?:string){return sdProfile(unit,name,grade)||smpProfile(unit,name,grade);}
+export function subjectProfile(unit:string,name:string,grade?:string){return smaProfile(unit,name,grade)||sdProfile(unit,name,grade)||smpProfile(unit,name,grade);}
 const normal=(s:string)=>String(s||'').trim().toLowerCase();
 export function sdProfile(unit:string,name:string,grade?:string){if(unit!=='SD'||grade&&!['5','6'].includes(String(grade)))return undefined;return sdSubjectProfiles.find(p=>[p.name,...p.aliases].some(n=>normal(n)===normal(name)));}
 export function presentationsFor(unit:string,name:string,grade?:string){return (subjectProfile(unit,name,grade)?.variants||[]).map(id=>variants[id]);}
 export function packageQuestionTypes(subject:any,extra:string[]=[],questions:any[]=[]){return [...new Set([...(subject?.questionTypes||Object.keys(questionTypeLabels)),...extra,...questions.map(q=>q.format||q.type)])].filter(t=>!!questionTypeLabels[t]);}
+
+export const smaQuestionTypes=['PG','PG_KOMPLEKS','MENJODOHKAN'];
+export function smaProfile(unit:string,name:string,grade?:string){if(unit!=='SMA'||!name||grade&&!['1','2','3'].includes(String(grade)))return undefined;return {name,types:smaQuestionTypes,variants:['sma_text','sma_table','sma_labeled','sma_info','sma_mcma','sma_picture','sma_match'],mode:/arab/i.test(name)?'ARAB':/matematika/i.test(name)?'MATEMATIKA':/fisika/i.test(name)?'FISIKA':/kimia/i.test(name)?'KIMIA':'TEKS'};}

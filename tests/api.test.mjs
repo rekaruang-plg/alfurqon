@@ -434,3 +434,15 @@ await call('saveSubject',{period,data:{...arab,questionTypes:['PG','URAIAN']}});
 assert.deepEqual((await state(period)).subjects.filter(s=>s.unit!=='SMP'),st.subjects.filter(s=>s.unit!=='SMP'));
 console.log('PASS: ten SMP masters, grades 1/2/3, Arabic defaults, package extensions, migration idempotence, administrator edits and other units preserved.');
 }
+// SMA uniform profiles, visual payloads, new subjects and package extensions.
+{
+await loginCard(ownerCard);const period={year:'2026/2027',semester:1};let st=await state(period);const others=st.subjects.filter(s=>s.unit!=='SMA');
+for(const s of st.subjects.filter(s=>s.unit==='SMA')){assert.deepEqual(s.grades,['1','2','3']);assert.deepEqual(s.questionTypes,['PG','PG_KOMPLEKS','MENJODOHKAN']);}
+await call('saveSubject',{period,data:{name:'Mapel SMA baru',unit:'SMA',grades:['1','2','3']}});st=await state(period);assert.deepEqual(st.subjects.find(s=>s.name==='Mapel SMA baru').questionTypes,['PG','PG_KOMPLEKS','MENJODOHKAN']);
+const img='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=';
+const questions=[{id:'sma-pg',type:'PG',text:'Pilih gambar',options:['[[image:0]]','B','C','D','E'],key:'0',points:5,mode:'TEKS',images:[img],presentation:'sma_picture'},{id:'sma-match',type:'MENJODOHKAN',text:'Pasangkan',options:[],left:['[[image:0]]','Butir 2'],right:['Keterangan','[[image:0]]'],key:'0,1',points:5,mode:'TEKS',images:[img],presentation:'sma_match'}];
+for(const grade of ['1','2','3'])await call('saveBank',{period,data:{title:'Visual SMA '+grade,unit:'SMA',subject:'Mapel SMA baru',grade,questions}});
+const bank=(await state(period)).banks.find(b=>b.title==='Visual SMA 3');assert.equal(bank.questions[0].presentation,'sma_picture');assert.equal(bank.questions[0].images[0],img);assert.equal(bank.questions[1].right[1],'[[image:0]]');
+assert.deepEqual((await state(period)).subjects.filter(s=>s.unit!=='SMA'),others);
+console.log('PASS: SMA all grades, new subject defaults, visual options/matching payload roundtrip, SD/SMP preserved.');
+}
