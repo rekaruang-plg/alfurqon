@@ -1,0 +1,1 @@
+export function gradingStatus(a:any){if(a.status!=='Dikumpulkan')return a.status==='Mengerjakan'?'Sedang dikerjakan':'Belum mulai';return a.published?'Nilai di Publish':a.graded?'Sudah dinilai':a.correctedAt?'Proses Penilaian':'Perlu dinilai';}

@@ -32,3 +32,9 @@ const {shuffle}=load('lib/model.ts',{'./review-policy':{}});
 for(let i=0;i<30;i++){const out=shuffle(flexResult.questions),a=out.findIndex(q=>q.id===flexResult.questions[0].id);assert.equal(out[a+1].id,flexResult.questions[1].id);assert.equal(out.length,4);}
 const grouped=sandbox.sanitize({...flexResult.questions[0],importReviewed:true});assert.equal(grouped.stimulus,'One shared story.');assert.throws(()=>sandbox.sanitize({...grouped,stimulus:''}),/Bacaan/);assert.throws(()=>sandbox.sanitize({...grouped,stimulus:'[PERIKSA GAMBAR]'}),/Perbaiki/);
 console.log('PASS: flexible passages, numbered restarts, bold candidates, ambiguous keys, no-key mode, grouped shuffle and persisted passage validation.');
+
+// Parenthesized essay weight must not inherit the preceding short-answer weight.
+const weightsFixture=await doc(p('ISIAN SINGKAT')+p('1. Complete this.')+p('ESSAI')+p('1. Explain this.')+p('KUNCI JAWABAN')+p('ISIAN SINGKAT (Satu Soal 2 Point)')+'<w:tbl><w:tr>'+cell('1')+cell('Short answer')+'</w:tr></w:tbl>'+p('ESSAI (Satu Soal 4 Point)')+'<w:tbl><w:tr>'+cell('1')+cell('Essay answer')+cell('Jika lengkap 4 point; sebagian 2 point.')+'</w:tr></w:tbl>');
+const weightsResult=await importNaturalWord(weightsFixture,async s=>s);assert.equal(weightsResult.questions.find(q=>q.type==='ISIAN').points,2);assert.equal(weightsResult.questions.find(q=>q.type==='URAIAN').points,4);
+for(const file of process.argv.slice(2).filter(f=>f.includes('ASAS 1 BAR 5'))){const parsed=await importNaturalWord(fs.readFileSync(file),async s=>s);assert.equal(parsed.questions.filter(q=>q.type==='URAIAN').length,5);assert(parsed.questions.filter(q=>q.type==='URAIAN').every(q=>q.points===4));}
+console.log('PASS: parenthesized essay heading assigns maximum score 4, independent of short-answer score 2.');

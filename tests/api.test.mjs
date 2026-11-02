@@ -376,3 +376,22 @@ const resumed=await call('enter',{token:tokens[1].token});assert.deepEqual(resum
 const legacy=await call('enter',{token:tokens[0].token});assert.deepEqual(legacy.questions,first.questions);
 console.log('PASS: 30 simultaneous participants receive distinct persisted permutations, shared passage groups stay together, legacy order excluded, resume and answer identity preserved.');
 }
+
+// Evaluation 3: stable teacher login, same-unit assignments, explicit duplicate subject types.
+{
+await loginCard(ownerCard);const period={year:'2026/2027',semester:1};
+const teacher=(await state(period)).staffList.find(t=>t.niy==='EVAL.2026.123');
+const before=(await call('accountCards',{period,kind:'teacher',id:teacher.id})).cards[0];
+await call('saveStaff',{period,data:{...teacher,niy:'EVAL.2026.999'}});
+const after=(await call('accountCards',{period,kind:'teacher',id:teacher.id})).cards[0];
+assert.equal(after.username,before.username);assert.equal(after.password,before.password);assert.equal(after.niy,'EVAL.2026.999');
+await loginCard(before);assert.equal((await state(period)).staff.id,teacher.id);await loginCard(ownerCard);
+await call('saveStaff',{period,data:{...teacher,niy:'EVAL.2026.999',assignments:[{unit:'SMP',subject:'Matematika',classes:[]}]}},400);
+await call('saveSubject',{period,data:{name:'Evaluasi duplicate',unit:'SD',grades:['5'],questionTypes:['PG']}});
+await call('saveSubject',{period,data:{name:'Evaluasi duplicate',unit:'SD',grades:['5'],questionTypes:['PG','PG_KOMPLEKS','BENAR_SALAH','ISIAN','URAIAN','MENJODOHKAN']}});
+let subject=(await state(period)).subjects.find(s=>s.name==='Evaluasi duplicate');assert.equal(subject.questionTypes.length,6);
+await call('saveSubject',{period,data:{...subject,questionTypes:['PG']}});
+await call('saveSubject',{period,data:{name:'Evaluasi duplicate',unit:'SD',grades:['5']}});
+subject=(await state(period)).subjects.find(s=>s.name==='Evaluasi duplicate');assert(subject.questionTypes.includes('URAIAN'));
+console.log('PASS: evaluation 3 teacher NIY edit preserves login/password, cross-unit assignment rejected, repeated subject saves update types.');
+}

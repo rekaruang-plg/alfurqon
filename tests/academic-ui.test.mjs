@@ -17,3 +17,12 @@ const {accountCardsHtml}=load('lib/print-accounts.ts');const html=accountCardsHt
 const pupil=accountCardsHtml([{kind:'student',name:'Siswa',nis:'001',className:'6A'}]);assert(pupil.includes('<dt>NIS</dt>'));assert(pupil.includes('<dt>Kelas</dt>'));
 for(const kind of ['teacher','class','student']){const w=new Excel.Workbook();await w.xlsx.readFile('public/templates/template-'+kind+'.xlsx');assert(w.worksheets[0].rowCount>=2);if(kind==='teacher'){assert.equal(w.worksheets[0].getCell('A1').text,'NIY');assert.equal(w.worksheets[0].getCell('G1').text,'Kelas');}}
 console.log('PASS: individual/all class toggles, WIB duration and invalid ranges, ascending/descending sorting, teacher/student print cards, HTML escaping, all downloadable Excel templates.');
+
+const {gradingStatus}=load('lib/exam-status.ts');
+assert.equal(gradingStatus({status:'Belum mulai'}),'Belum mulai');
+assert.equal(gradingStatus({status:'Mengerjakan'}),'Sedang dikerjakan');
+assert.equal(gradingStatus({status:'Dikumpulkan'}),'Perlu dinilai');
+assert.equal(gradingStatus({status:'Dikumpulkan',correctedAt:1}),'Proses Penilaian');
+assert.equal(gradingStatus({status:'Dikumpulkan',graded:true}),'Sudah dinilai');
+assert.equal(gradingStatus({status:'Dikumpulkan',graded:true,published:true}),'Nilai di Publish');
+console.log('PASS: grading statuses follow submission and grading lifecycle.');
