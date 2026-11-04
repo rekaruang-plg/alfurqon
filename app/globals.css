@@ -24,3 +24,7 @@
 .table-pagination{margin:14px 0;flex-wrap:wrap}.table-pagination label{display:flex;align-items:center;gap:8px}.date-time-picker{padding:14px;border:1px solid var(--line);border-radius:10px;background:#fff;margin:-4px 0 18px;max-width:370px}.calendar-heading,.calendar-time{display:flex;align-items:center;justify-content:space-between;gap:8px}.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:12px 0;text-align:center}.calendar-grid button{padding:8px 0}.calendar-time{flex-wrap:wrap}.calendar-time label{display:flex;flex-direction:column;gap:5px;font-size:12px}
 
 .bank-add-button{margin-right:12px;margin-bottom:12px}select[aria-label="Filter lingkup materi"]{margin-bottom:12px;max-width:100%}
+
+.student-page .student-dashboard{width:min(100%,1180px);margin-inline:auto;box-sizing:border-box;min-width:0}
+.student-dashboard .student-activity{padding:12px 18px;min-height:0}.student-activity p{margin:4px 0}
+@media(max-width:700px){.student-dashboard .stats{grid-template-columns:1fr}.student-dashboard .toolbar{flex-wrap:wrap}.student-dashboard .table-wrap{max-width:100%;overflow-x:auto}}

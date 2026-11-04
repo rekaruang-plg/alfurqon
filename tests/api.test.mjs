@@ -317,6 +317,17 @@ assert.equal((await call('heartbeat',{token:securityToken})).securityLocked,true
 await call('securityLock',{token:securityToken,session:'99999999-9999-4999-a999-999999999999'},400);
 await loginCard(ownerCard);await call('releaseSession',{id:locked.id,reason:'Verified student device'});
 await loginCard(cardsById[mp[1].id]);const unlocked=await call('enter',{token:securityToken});assert.equal(unlocked.securityLocked,false);assert(!unlocked.pausedAt);assert.equal(unlocked.answers['meet-written'],'Co');
+await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co'}});
+await loginCard(ownerCard);
+const lockedRow=sql.prepare('SELECT data FROM attempts WHERE id=?').get(locked.id);
+const expiredLocked={...JSON.parse(lockedRow.data),deadline:Date.now()-100};
+sql.prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=?').run(JSON.stringify(expiredLocked),locked.id);
+await call('extraTime',{id:locked.id,minutes:10,reason:'Past deadline'},400);
+const expiredMonitor=(await state(meetingPeriod)).attempts.find(a=>a.id===locked.id);
+assert.equal(expiredMonitor.status,'Dikumpulkan');assert.equal(expiredMonitor.timedOut,true);assert.equal(expiredMonitor.answers['meet-written'],'Co');assert(!expiredMonitor.pausedAt);
+await loginCard(cardsById[mp[1].id]);assert.equal((await state()).attempts.find(a=>a.id===locked.id).status,'Dikumpulkan');
+await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400);
+console.log('PASS: expired locked attempt persists answers and closes for both proctor and student.');
 console.log('PASS: fifteen-minute server token expiry, bound active sessions, second-device denial, browser violation lock, saved answer, proctor-only unlock and resume.');
 
 }
