@@ -474,3 +474,21 @@ await call('saveClass',{period,data:{...target,name:'5 C'}});assert.equal((await
 await call('bulkStudents',{period,ids:[pupil.id],operation:'delete'});assert(!(await state(period)).students.some(x=>x.id===pupil.id));assert((await state(semester2)).students.some(x=>x.id===pupil.id));assert.equal((await call('accountCards',{period,kind:'student'})).cards.length,0);
 console.log('PASS: revision 5 annual identity/history retained, empty new-year masters, isolated semester, bulk move/delete, rename, scoped cards.');
 }
+
+// Student/teacher evaluation: SD homeroom authoring, scope and draft deletion.
+{
+cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+const period={year:'2042/2043',semester:1};await call('saveYear',{data:{name:period.year}});await seedYearSubjects(period.year);
+await writeRecord('sg-teacher','staff',{id:'sg-teacher',name:'Guru SD QA',email:'sg@test.invalid',role:'Guru',unit:'SD',year:period.year,subject:'Bahasa Indonesia',assignments:[{unit:'SD',subject:'Bahasa Indonesia',classes:['5 A']}]});
+await call('importClasses',{period,rows:[{Unit:'SD',Kelas:'5 A',Tingkat:'5',homeroomId:'sg-teacher'},{Unit:'SD',Kelas:'6 B',Tingkat:'6'}],commit:true});
+const q=[{id:'sg-q',type:'PG',text:'Satu tambah satu?',options:['2','3'],key:'0',points:10}];
+user={email:'sg@test.invalid',displayName:'Guru SD QA'};
+assert.equal((await state(period)).staff.homeroomClasses.length,1);
+await call('saveBank',{period,data:{title:'Wali kelas matematika',unit:'SD',grade:'5',subject:'Matematika',questions:q}});
+assert((await state(period)).banks.some(b=>b.title==='Wali kelas matematika'));
+await call('saveBank',{period,data:{title:'Bukan kelasnya',unit:'SD',grade:'6',subject:'Matematika',questions:q}},400);
+await call('saveBank',{period,data:{title:'Bukan unitnya',unit:'SMP',grade:'1',subject:'Matematika',questions:q}},400);
+const d=await call('saveDraft',{period,data:{title:'Draft yang dibuang',questions:q}});assert((await state(period)).drafts.some(x=>x.id===d.id));
+await call('deleteDraft',{period,id:d.id});assert(!(await state(period)).drafts.some(x=>x.id===d.id));
+console.log('PASS: SD homeroom can author other subjects for own grade, sees own bank, other grade/unit denied, server draft removed.');
+}

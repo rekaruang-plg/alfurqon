@@ -32,3 +32,5 @@
 .table-sort{border:0;background:transparent;padding:0;color:inherit;font:inherit;font-weight:600;text-align:left}.table-pagination{margin-top:12px}.table-pagination label{margin-left:auto}.date-time-trigger{width:100%;text-align:left;min-height:42px}.bank-active{float:right}.table-wrap td{white-space:normal}.exam-class-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 
 .option-edit-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.option-edit-row>input:not([type=radio]):not([type=checkbox]){flex:1}.option-edit-row section{margin:0;padding:6px}.option-edit-row input[type=file]{max-width:200px}.package-question{padding:20px 0;border-bottom:1px solid #ddd}.app-dialog:has(.package-question){width:min(900px,94vw)}.draft-row{display:flex;gap:12px;align-items:center;margin:14px 0}.draft-row strong{flex:1}
+
+.student-dashboard h2{margin-top:24px;margin-bottom:10px}.student-dashboard .tags span{font-size:12px;padding:6px 10px}.student-dashboard .tags{margin-top:12px;gap:8px;flex-wrap:wrap}
