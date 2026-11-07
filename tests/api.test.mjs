@@ -26,6 +26,7 @@ const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8'))
 let cookie='';
 const routes=evaluate(source,{env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32)},actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
+async function seedYearSubjects(year){for(const unit of ['SD','SMP','SMA'])for(const name of simulation.subjectCatalog[unit]||[])await call('saveSubject',{period:{year,semester:1},data:{name,unit,grades:unit==='SD'?['5','6']:['1','2','3']}});}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
 assert.equal((await state()).needsSetup,true);await call('setup');await call('setup',{},400);
 let data=await state();assert.equal(data.students.length,4);const exam=data.exams[0],bank=data.banks[0];
@@ -160,12 +161,12 @@ console.log('PASS: revision 2 semester isolation, non-destructive repeated impor
 // Revision 3: simplified imports, lifecycle, credential reset and frozen-bank independence.
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
 await call('saveYear',{data:{name:'2027/2028'}});assert.deepEqual((await state()).years.find(y=>y.name==='2027/2028').semesters,[1,2]);
-await call('activateYear',{data:(await state()).years.find(y=>y.name==='2027/2028')});
+await call('activateYear',{data:(await state()).years.find(y=>y.name==='2027/2028')});assert.equal((await state()).subjects.length,0);assert.equal((await state()).staffList.filter(t=>t.role==='Guru').length,0);await seedYearSubjects('2027/2028');
 await call('importClasses',{rows:[{Unit:'SD',Kelas:'6N',Tingkat:'6'}],commit:true});assert.equal((await state()).classes.find(c=>c.name==='6N').year,'2027/2028');
 assert.equal((await call('importStudents',{rows:[{Nama:'Missing gender',NIS:'MISSING',Unit:'SD',Kelas:'6N'}]})).valid,false);
 await call('importStudents',{rows:[{Nama:'New pupil',NIS:'NEW28',Unit:'SD',Kelas:'6N',JK:'P'}],commit:true});let newPupil=(await state()).students.find(s=>s.nis==='NEW28');assert.equal(newPupil.year,'2027/2028');
 const bareTeacherRows=[{NIY:'2027.001',Nama:'Teacher without subjects',Unit:'SD',JK:'P'}];await call('importTeachers',{rows:bareTeacherRows,commit:true});let bareTeacher=(await state()).staffList.find(t=>t.niy==='2027.001');assert.equal(bareTeacher.subject,'');assert.equal(bareTeacher.assignments.length,0);
-await call('saveStaff',{data:{...bareTeacher,assignments:[{unit:'SD',subject:'MATEMATIKA',classes:['6N','6R']},{unit:'SD',subject:'bahasa arab',classes:['6N']}]}});bareTeacher=(await state()).staffList.find(t=>t.id===bareTeacher.id);assert.equal(bareTeacher.assignments[0].subject,'Matematika');assert.equal(bareTeacher.assignments[0].classes.length,2);
+await call('saveStaff',{data:{...bareTeacher,assignments:[{unit:'SD',subject:'MATEMATIKA',classes:['6N']},{unit:'SD',subject:'bahasa arab',classes:['6N']}]}});bareTeacher=(await state()).staffList.find(t=>t.id===bareTeacher.id);assert.equal(bareTeacher.assignments[0].subject,'Matematika');assert.equal(bareTeacher.assignments[0].classes.length,1);
 await call('importTeachers',{rows:bareTeacherRows,commit:true});assert.equal((await state()).staffList.find(t=>t.id===bareTeacher.id).assignments.length,2);
 let oldCard=(await call('accountCards',{kind:'teacher',id:bareTeacher.id})).cards[0];await loginCard(oldCard);const oldCookie=cookie;cookie='';
 let resetCard=(await call('accountCards',{kind:'teacher',id:bareTeacher.id,reset:true})).cards[0];assert.notEqual(resetCard.password,oldCard.password);assert.equal(resetCard.username,oldCard.username);
@@ -181,8 +182,8 @@ await call('saveSubject',{data:{name:'Mapel revisi',unit:'SD',grades:['5','6']}}
 user={email:'admin@example.test',displayName:'Admin SMP'};await call('deleteMaster',{kind:'subject',id:custom.id},400);user={email:bareTeacher.email,displayName:'Teacher'};await call('deleteMaster',{kind:'student',id:newPupil.id},400);user={email:'qa@example.test',displayName:'QA Admin'};
 await call('deleteMaster',{kind:'subject',id:custom.id});assert(!(await state()).subjects.some(s=>s.id===custom.id));
 const populatedClass=(await state({year:'2028/2029',semester:1})).classes.find(c=>c.name==='6N');await call('deleteMaster',{kind:'class',id:populatedClass.id},400);
-await loginCard(resetCard);const deleteCookie=cookie;cookie='';await call('deleteMaster',{kind:'student',id:newPupil.id});assert(!(await state()).students.some(s=>s.id===newPupil.id));assert(sql.prepare('SELECT data FROM records WHERE id=?').get(newPupil.id));assert.equal((await routes.GET(new Request('https://cbt.test/api/cbt',{headers:{cookie:deleteCookie}}))).status,401);
-await call('deleteMaster',{kind:'class',id:populatedClass.id});assert(!(await state()).classes.some(s=>s.id===populatedClass.id));await call('deleteMaster',{kind:'staff',id:bareTeacher.id});assert(!(await state()).staffList.some(s=>s.id===bareTeacher.id));
+await loginCard(resetCard);const deleteCookie=cookie;cookie='';await call('deleteMaster',{kind:'student',id:newPupil.id,period:{year:'2028/2029',semester:1}});assert(!(await state()).students.some(s=>s.id===newPupil.id));assert(sql.prepare('SELECT data FROM records WHERE id=?').get(newPupil.id));assert.equal((await routes.GET(new Request('https://cbt.test/api/cbt',{headers:{cookie:deleteCookie}}))).status,401);
+await call('deleteMaster',{kind:'class',id:populatedClass.id,period:{year:'2028/2029',semester:1}});assert(!(await state()).classes.some(s=>s.id===populatedClass.id));await call('deleteMaster',{kind:'staff',id:bareTeacher.id,period:{year:'2028/2029',semester:1}});assert(!(await state()).staffList.some(s=>s.id===bareTeacher.id));
 console.log('PASS: revision 3 years/activation/rename, period-default imports, required gender, teacher import without assignments, case-insensitive mapel, multiple classes, reset revokes sessions, mapel editing, deletion scope/history, frozen-bank edits/provenance, stale bank cannot override selected mapel.');
 // Presentation readiness: successful school logins never consume failed-login limits.
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
@@ -240,7 +241,7 @@ console.log('PASS: schedule Full/Korektor/Pengawas duties via password sessions,
 // Revision 4: academic snapshots, duplicate upserts, demo teachers and safe deletion.
 await loginCard(ownerCard);
 const p1={year:'2032/2033',semester:1},p2={...p1,semester:2};
-await call('saveYear',{data:{name:p1.year}});
+await call('saveYear',{data:{name:p1.year}});await seedYearSubjects(p1.year);
 await call('saveClass',{period:p1,data:{unit:'SD',name:'5 Bilal',grade:'5',year:p1.year}});
 const originalClass=(await state(p1)).classes.find(c=>c.name==='5 BILAL');
 let preview4=await call('importClasses',{period:p1,rows:[{Unit:'SD','Nama Kelas':'5 bilal',Tingkat:'5'},{Unit:'SD',Kelas:'5 Muadz',Tingkat:'5'}]});assert.deepEqual(preview4.duplicates,['5 BILAL']);
@@ -266,14 +267,14 @@ const demos4=await (await authCall('createDemos')).json();const demoOwnerCard=de
 console.log('PASS: revision 4 case-insensitive upserts, duplicate preview, auto-created classes, uppercase student names, semester master copies/independent edits/stable identity, semester-2 student login/token identity, frozen-bank retention, schedule cancellation, demo teacher creation/login isolation.');
 
 await loginCard(ownerCard);
-const legacyYear='2034/2035';await call('saveYear',{data:{name:legacyYear}});
+const legacyYear='2034/2035';await call('saveYear',{data:{name:legacyYear}});await seedYearSubjects(legacyYear);
 await writeRecord('legacy-class-upper','class',{name:'5 BILAL',unit:'SD',year:legacyYear,grade:'5'});await writeRecord('legacy-class-mixed','class',{name:'5 Bilal',unit:'SD',year:legacyYear,grade:'5'});await writeRecord('legacy-pupil','student',{name:'LEGACY',nis:'LEGACY4',unit:'SD',year:legacyYear,className:'5 Bilal',gender:'L'});sql.prepare("DELETE FROM records WHERE id='class-normalization-v4'").run();
 const migrated4=await state({year:legacyYear,semester:1});assert.equal(migrated4.classes.filter(c=>c.name==='5 BILAL').length,1);assert.equal(migrated4.students.find(s=>s.id==='legacy-pupil').className,'5 BILAL');assert(JSON.parse(sql.prepare('SELECT data FROM records WHERE id=?').get('legacy-class-mixed').data).mergedInto);
 console.log('PASS: legacy mixed-case classroom normalization merges duplicates and preserves student identity/references.');
 
 // Meeting 29 October: isolated fixtures and end-to-end policy checks.
 await loginCard(ownerCard);
-const meetingPeriod={year:'2035/2036',semester:1};await call('saveYear',{data:{name:meetingPeriod.year}});
+const meetingPeriod={year:'2035/2036',semester:1};await call('saveYear',{data:{name:meetingPeriod.year}});await seedYearSubjects(meetingPeriod.year);
 await call('saveClass',{period:meetingPeriod,data:{name:'6 MEETING',grade:'6',unit:'SD',year:meetingPeriod.year}});
 for(let i=0;i<3;i++)await call('saveStudent',{period:meetingPeriod,data:{name:'Meeting '+i,nis:'MEET'+i,unit:'SD',className:'6 MEETING',gender:'L',year:meetingPeriod.year}});
 await call('saveSubject',{period:meetingPeriod,data:{name:'Meeting Science',unit:'SD',grades:['6'],questionTypes:['PG','PG_KOMPLEKS','ISIAN','URAIAN','BENAR_SALAH']}});
@@ -309,7 +310,7 @@ assert.equal((await call('heartbeat',{token:securityToken})).status,'Mengerjakan
 await call('heartbeat',{token:securityToken,session:'99999999-9999-4999-a999-999999999999'},400);
 const originalNow=Date.now;Date.now=()=>rotating.expiresAt+1;
 await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400);
-await loginCard(ownerCard);const rotated=await call('viewShared',{examId:securityExam.examId});assert.notEqual(rotated.token,rotating.token);Date.now=originalNow;
+await loginCard(ownerCard);await call('viewShared',{examId:securityExam.examId},400);const rotated=await call('generateShared',{examId:securityExam.examId});assert.notEqual(rotated.token,rotating.token);Date.now=originalNow;
 await loginCard(cardsById[mp[1].id]);
 const locked=await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co'}});assert.equal(locked.securityLocked,true);assert.equal(locked.answers['meet-written'],'Co');assert(locked.pausedAt);
 await call('enter',{token:securityToken},400);await call('answer',{token:securityToken,questionId:'meet-written',value:'changed'},400);
@@ -456,4 +457,20 @@ for(const grade of ['1','2','3'])await call('saveBank',{period,data:{title:'Visu
 const bank=(await state(period)).banks.find(b=>b.title==='Visual SMA 3');assert.equal(bank.questions[0].presentation,'sma_picture');assert.equal(bank.questions[0].images[0],img);assert.equal(bank.questions[1].right[1],'[[image:0]]');
 assert.deepEqual((await state(period)).subjects.filter(s=>s.unit!=='SMA'),others);
 console.log('PASS: SMA all grades, new subject defaults, visual options/matching payload roundtrip, SD/SMP preserved.');
+}
+
+// Revision 5: annual identity reuse, semester isolation, bulk operations, rename.
+{
+await loginCard(ownerCard);const period={year:'2040/2041',semester:1};await call('saveYear',{data:{name:period.year}});
+const empty=await state(period);assert.equal(empty.students.length,0);assert.equal(empty.staffList.filter(x=>x.role==='Guru').length,0);assert.equal(empty.subjects.length,0);assert(empty.banks.length>0);
+await call('importClasses',{period,rows:[{Unit:'SD',Kelas:'5 A',Tingkat:'5'},{Unit:'SD',Kelas:'5 B',Tingkat:'5'}],commit:true});
+const before=(await state({year:'2026/2027',semester:1})).students.find(x=>x.id===pupil.id);
+await call('saveStudent',{period,data:{...before,year:period.year,className:'5 A'}});
+let st=await state(period);assert.equal(st.students.find(x=>x.id===pupil.id).className,'5 A');assert.equal((await state({year:'2026/2027',semester:1})).students.find(x=>x.id===pupil.id).className,before.className);
+const semester2={...period,semester:2};assert.equal((await state(semester2)).students.find(x=>x.id===pupil.id).className,'5 A');
+const target=st.classes.find(x=>x.name==='5 B');await call('bulkStudents',{period,ids:[pupil.id],operation:'move',classId:target.id});
+assert.equal((await state(period)).students.find(x=>x.id===pupil.id).className,'5 B');assert.equal((await state(semester2)).students.find(x=>x.id===pupil.id).className,'5 A');
+await call('saveClass',{period,data:{...target,name:'5 C'}});assert.equal((await state(period)).students.find(x=>x.id===pupil.id).className,'5 C');await call('deleteMaster',{period,kind:'class',id:target.id},400);
+await call('bulkStudents',{period,ids:[pupil.id],operation:'delete'});assert(!(await state(period)).students.some(x=>x.id===pupil.id));assert((await state(semester2)).students.some(x=>x.id===pupil.id));assert.equal((await call('accountCards',{period,kind:'student'})).cards.length,0);
+console.log('PASS: revision 5 annual identity/history retained, empty new-year masters, isolated semester, bulk move/delete, rename, scoped cards.');
 }
