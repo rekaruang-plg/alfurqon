@@ -151,7 +151,7 @@ sql.prepare("UPDATE records SET data=json_set(data,'$.end',?) WHERE id=?").run(n
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};const rotated=await call('generateShared',{examId:revExam.id});await loginCard(revCards[0]);await call('studentLaunch',{examId:revExam.id,code:shared2.token},400);assert.equal((await call('heartbeat',{token:private1,session:'33333333-3333-4333-a333-333333333333'})).id,started1.id);sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(started1.id);await call('submit',{token:private1,session:'33333333-3333-4333-a333-333333333333'});
 await loginCard(revCards[1]);await call('answer',{token:private2,questionId:'cx',value:'0,1,2'});sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(started2.id);await call('submit',{token:private2});
 cookie='';user={email:niyTeacher.email,displayName:niyTeacher.name};await call('publishMany',{ids:[started1.id,started2.id]},400);await call('grade',{id:started1.id,grades:{cx:0}});await call('grade',{id:started2.id,grades:{cx:0}});await call('publishMany',{ids:[started1.id]});const scored=await state();assert(scored.attempts.find(a=>a.id===started1.id).published);assert(!scored.attempts.find(a=>a.id===started2.id).published);assert.equal(scored.attempts.find(a=>a.id===started1.id).score,100);
-const absent=scored.attempts.find(a=>a.examId===revExam.id&&a.status==='Belum mulai');const makeup=await call('makeup',{id:absent.id,start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});await call('makeup',{id:started1.id,start:new Date().toISOString(),end:new Date(Date.now()+3600000).toISOString()},400);
+const absent=scored.attempts.find(a=>a.examId===revExam.id&&a.status==='Belum mulai');const makeup=await call('makeup',{reason:'Siswa berhalangan mengikuti jadwal awal',id:absent.id,start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});await call('makeup',{reason:'Siswa berhalangan mengikuti jadwal awal',id:started1.id,start:new Date().toISOString(),end:new Date(Date.now()+3600000).toISOString()},400);
 assert(!makeup.token);user={email:'qa@example.test',displayName:'QA Admin'};makeup.token=(await call('viewShared',{examId:makeup.examId})).token;await loginCard(revCards[0]);await call('studentLaunch',{examId:makeup.examId,code:makeup.token},400);await loginCard(revCards[2]);assert((await call('studentLaunch',{examId:makeup.examId,code:makeup.token})).token);
 cookie='';user={email:niyTeacher.email,displayName:niyTeacher.name};const draft=await call('saveDraft',{data:{title:'Belum lengkap',questions:[]}});assert((await state()).drafts.some(d=>d.id===draft.id));user={email:wali.email,displayName:wali.name};assert(!(await state()).drafts.some(d=>d.id===draft.id));await call('deleteDraft',{id:draft.id},400);
 user={email:'qa@example.test',displayName:'QA Admin'};await call('deleteTopic',{data:(await state()).topics.find(t=>t.name==='Revisi lengkap')},400);
@@ -291,9 +291,9 @@ assert.equal((await state(meetingPeriod)).attempts.filter(a=>a.examId===me.id).l
 await loginCard(cardsById[mp[0].id]);const pt=(await call('studentLaunch',{examId:me.id,code:mt.token})).token;const ma=await call('enter',{token:pt});await call('answer',{token:pt,questionId:'meet-written',value:'Co'});
 await loginCard(ownerCard);const mt2=await call('generateShared',{period:meetingPeriod,examId:me.id});await loginCard(cardsById[mp[0].id]);assert.equal((await call('heartbeat',{token:pt})).answers['meet-written'],'Co');await call('studentLaunch',{examId:me.id,code:mt.token},400);
 const ended=await call('exitExam',{token:pt,answers:{'meet-pg':'1'}});assert.equal(ended.status,'Dikumpulkan');assert.equal(ended.answers['meet-pg'],'1');assert.equal((await call('enter',{token:pt})).status,'Dikumpulkan');await call('answer',{token:pt,questionId:'meet-pg',value:'0'});assert.equal((await call('heartbeat',{token:pt})).answers['meet-pg'],'1');
-await loginCard(ownerCard);const oldOther=sql.prepare('SELECT id FROM attempts WHERE student_id=? AND exam_id=?').get(mp[1].id,me.id).id;const windowMeeting={start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()};await call('retake',{id:ma.id,...windowMeeting},400);assert(sql.prepare('SELECT id FROM attempts WHERE id=?').get(ma.id));const repeat=await call('retake',{id:ma.id,confirmDelete:true,...windowMeeting});assert(!sql.prepare('SELECT id FROM attempts WHERE id=?').get(ma.id));assert(!sql.prepare('SELECT id FROM records WHERE id=?').get('vault-'+ma.id));assert(sql.prepare('SELECT id FROM attempts WHERE id=?').get(oldOther));assert(sql.prepare('SELECT id FROM records WHERE id=?').get(mp[0].id));
+await loginCard(ownerCard);const oldOther=sql.prepare('SELECT id FROM attempts WHERE student_id=? AND exam_id=?').get(mp[1].id,me.id).id;const windowMeeting={start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()};await call('retake',{reason:'Pengawas menyetujui ujian ulang',id:ma.id,...windowMeeting},400);assert(sql.prepare('SELECT id FROM attempts WHERE id=?').get(ma.id));const repeat=await call('retake',{reason:'Pengawas menyetujui ujian ulang',id:ma.id,confirmDelete:true,...windowMeeting});assert(!sql.prepare('SELECT id FROM attempts WHERE id=?').get(ma.id));assert(!sql.prepare('SELECT id FROM records WHERE id=?').get('vault-'+ma.id));assert(sql.prepare('SELECT id FROM attempts WHERE id=?').get(oldOther));assert(sql.prepare('SELECT id FROM records WHERE id=?').get(mp[0].id));
 await loginCard(cardsById[mp[0].id]);await call('studentLaunch',{examId:me.id,code:mt2.token},400);const rt=(await call('studentLaunch',{examId:repeat.examId,code:repeat.token})).token;const ra=await call('enter',{token:rt});assert.equal(Object.keys(ra.answers).length,0);sql.prepare("UPDATE attempts SET data=json_set(data,'$.lastSeenAt',?) WHERE id=?").run(Date.now()-121000,ra.id);assert.equal((await call('heartbeat',{token:rt})).status,'Dikumpulkan');
-await loginCard(ownerCard);const follow=await call('makeup',{id:oldOther,...windowMeeting});await loginCard(cardsById[mp[1].id]);const ft=(await call('studentLaunch',{examId:follow.examId,code:follow.token})).token;const fa=await call('enter',{token:ft});await authCall('logout');assert.equal(JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(fa.id).data).status,'Dikumpulkan');
+await loginCard(ownerCard);const follow=await call('makeup',{reason:'Siswa berhalangan mengikuti jadwal awal',id:oldOther,...windowMeeting});await loginCard(cardsById[mp[1].id]);const ft=(await call('studentLaunch',{examId:follow.examId,code:follow.token})).token;const fa=await call('enter',{token:ft});await authCall('logout');assert.equal(JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(fa.id).data).status,'Dikumpulkan');
 await loginCard(cardsById[mp[0].id]);const recoveryStudentCookie=cookie;await authCall('createRecoveryCode',{currentPassword:'wrong'},400);const recovery=(await (await authCall('createRecoveryCode',{currentPassword:cardsById[mp[0].id].password})).json()).code;assert(recovery&&!JSON.stringify(await state()).includes(recovery));cookie='';await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:'wrong',password:'meeting-reset-private-123'},400);await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:recovery,password:'meeting-reset-private-123'});await authCall('recoverPassword',{username:cardsById[mp[0].id].username,code:recovery,password:'meeting-reset-private-456'},400);assert.equal((await routes.GET(new Request('https://cbt.test/api/cbt',{headers:{cookie:recoveryStudentCookie}}))).status,401);await loginCard({...cardsById[mp[0].id],password:'meeting-reset-private-123'});assert((await state()).studentPortal);
 await loginCard(ownerCard);const teacherRecoveryCard=(await call('accountCards',{kind:'teacher',id:roleTeacher.id})).cards[0];await loginCard(teacherRecoveryCard);const tr=(await (await authCall('createRecoveryCode',{currentPassword:teacherRecoveryCard.password})).json()).code;cookie='';await authCall('recoverPassword',{username:teacherRecoveryCard.username,code:tr,password:'meeting-teacher-private-123'});await loginCard({...teacherRecoveryCard,password:'meeting-teacher-private-123'});assert.equal((await state()).staff.role,'Guru');
 console.log('PASS: meeting 29 October student exclusions, unit options, per-subject question types, true/false, case sensitivity, exact MCMA, rotating tokens without disconnect, exit/timeout/logout collection, isolated confirmed retake deletion, makeup, student/teacher single-use recovery and session revocation.');
@@ -301,7 +301,7 @@ console.log('PASS: meeting 29 October student exclusions, unit options, per-subj
 // Rotating entry code never becomes an attempt credential; device/session binding survives rotation.
 await loginCard(ownerCard);
 const securityWindow={start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()};
-const securityExam=await call('retake',{id:fa.id,confirmDelete:true,...securityWindow});
+const securityExam=await call('retake',{reason:'Pengawas menyetujui ujian ulang',id:fa.id,confirmDelete:true,...securityWindow});
 const rotating=await call('viewShared',{examId:securityExam.examId});assert.equal(rotating.expiresAt%900000,0);assert.equal(rotating.token,(await call('viewShared',{examId:securityExam.examId})).token);
 await loginCard(cardsById[mp[1].id]);const securityToken=(await call('studentLaunch',{examId:securityExam.examId,code:rotating.token})).token;
 const securityAttempt=await call('enter',{token:securityToken});assert.equal(securityAttempt.exam.browserGuard,true);
@@ -313,23 +313,48 @@ await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400)
 await loginCard(ownerCard);await call('viewShared',{examId:securityExam.examId},400);const rotated=await call('generateShared',{examId:securityExam.examId});assert.notEqual(rotated.token,rotating.token);Date.now=originalNow;
 await loginCard(cardsById[mp[1].id]);
 const locked=await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co'}});assert.equal(locked.securityLocked,true);assert.equal(locked.answers['meet-written'],'Co');assert(locked.pausedAt);
-await call('enter',{token:securityToken},400);await call('answer',{token:securityToken,questionId:'meet-written',value:'changed'},400);
+assert.equal((await call('enter',{token:securityToken})).securityLocked,true);await call('answer',{token:securityToken,questionId:'meet-written',value:'changed'},400);
 assert.equal((await call('heartbeat',{token:securityToken})).securityLocked,true);
 await call('securityLock',{token:securityToken,session:'99999999-9999-4999-a999-999999999999'},400);
-await loginCard(ownerCard);await call('releaseSession',{id:locked.id,reason:'Verified student device'});
-await loginCard(cardsById[mp[1].id]);const unlocked=await call('enter',{token:securityToken});assert.equal(unlocked.securityLocked,false);assert(!unlocked.pausedAt);assert.equal(unlocked.answers['meet-written'],'Co');
-await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co'}});
+await loginCard(ownerCard);await call('releaseSession',{id:locked.id,reason:'Verified student device'},400);
+const resetCode=(await call('generateShared',{examId:securityExam.examId})).token;
+await loginCard(cardsById[mp[1].id]);
+assert((await call('studentLaunch',{examId:securityExam.examId,code:resetCode})).token);
+await call('requestUnlock',{token:securityToken,code:'WRONG'},400);
+await call('requestUnlock',{token:securityToken,code:resetCode,session:'99999999-9999-4999-a999-999999999999'},400);
+const unlocked=await call('requestUnlock',{token:securityToken,code:resetCode});assert.equal(unlocked.resetCount,1);assert.equal(unlocked.securityLocked,false);assert(!unlocked.pausedAt);assert.equal(unlocked.answers['meet-written'],'Co');
+await call('requestUnlock',{token:securityToken,code:resetCode},400);
+const repeatedViolation=await call('securityLock',{token:securityToken,reason:'hidden',answers:{'meet-written':'Co final'}});assert.equal(repeatedViolation.status,'Dikumpulkan');assert.equal(repeatedViolation.answers['meet-written'],'Co final');assert.equal(repeatedViolation.resetCount,1);
+await call('requestUnlock',{token:securityToken,code:resetCode},400);
 await loginCard(ownerCard);
-const lockedRow=sql.prepare('SELECT data FROM attempts WHERE id=?').get(locked.id);
-const expiredLocked={...JSON.parse(lockedRow.data),deadline:Date.now()-100};
-sql.prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=?').run(JSON.stringify(expiredLocked),locked.id);
-await call('extraTime',{id:locked.id,minutes:10,reason:'Past deadline'},400);
 const expiredMonitor=(await state(meetingPeriod)).attempts.find(a=>a.id===locked.id);
-assert.equal(expiredMonitor.status,'Dikumpulkan');assert.equal(expiredMonitor.timedOut,true);assert.equal(expiredMonitor.answers['meet-written'],'Co');assert(!expiredMonitor.pausedAt);
+assert.equal(expiredMonitor.status,'Dikumpulkan');assert.equal(expiredMonitor.resetCount,1);assert(expiredMonitor.actionNotes.some(n=>n.action==='Reset token 1 dari 1'));assert(!expiredMonitor.pausedAt);
+await call('extraTime',{id:locked.id,minutes:10,reason:'Past deadline'},400);
 await loginCard(cardsById[mp[1].id]);assert.equal((await state()).attempts.find(a=>a.id===locked.id).status,'Dikumpulkan');
 await call('studentLaunch',{examId:securityExam.examId,code:rotating.token},400);
-console.log('PASS: expired locked attempt persists answers and closes for both proctor and student.');
-console.log('PASS: fifteen-minute server token expiry, bound active sessions, second-device denial, browser violation lock, saved answer, proctor-only unlock and resume.');
+// Rev6: mandatory retake note, automatic timed pause and second-violation collection.
+await loginCard(ownerCard);
+await call('retake',{id:locked.id,confirmDelete:true,...securityWindow,reason:''},400);
+const rev6Retake=await call('retake',{id:locked.id,confirmDelete:true,...securityWindow,reason:'Perangkat bermasalah dan disetujui pengawas'});
+await loginCard(cardsById[mp[1].id]);
+const rev6Token=(await call('studentLaunch',{examId:rev6Retake.examId,code:rev6Retake.token})).token;
+const rev6Start=await call('enter',{token:rev6Token});assert.equal(rev6Start.resetCount,0);
+await loginCard(ownerCard);
+await call('pauseTime',{id:rev6Start.id,minutes:0,reason:'Jeda tidak valid'},400);
+await call('pauseTime',{id:rev6Start.id,minutes:1,reason:'Gangguan jaringan ruang ujian'});
+await call('proctorNote',{id:rev6Start.id,reason:'Siswa menunggu jaringan pulih'});
+const pausedRev6=JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(rev6Start.id).data);assert.equal(pausedRev6.pauseUntil-pausedRev6.pausedAt,60000);assert.equal(pausedRev6.deadline,rev6Start.deadline);
+await loginCard(cardsById[mp[1].id]);
+assert.equal((await call('heartbeat',{token:rev6Token})).pauseUntil,pausedRev6.pauseUntil);
+await call('answer',{token:rev6Token,questionId:'meet-written',value:'blocked'},400);
+assert.equal((await call('enter',{token:rev6Token})).pauseUntil,pausedRev6.pauseUntil);
+Date.now=()=>pausedRev6.pauseUntil+1;
+const resumedRev6=await call('heartbeat',{token:rev6Token});assert(!resumedRev6.pausedAt);assert.equal(resumedRev6.deadline,rev6Start.deadline+60000);assert.equal(resumedRev6.submitAfter,rev6Start.submitAfter+60000);Date.now=originalNow;
+assert.equal((await call('heartbeat',{token:rev6Token})).deadline,resumedRev6.deadline);
+await loginCard(ownerCard);assert((await state(meetingPeriod)).attempts.find(a=>a.id===rev6Start.id).actionNotes.some(n=>n.reason==='Siswa menunggu jaringan pulih'));
+console.log('PASS: Rev6 one reset with current shared token, wrong code/device denied, reset count persisted, second violation auto-submits latest answers, no proctor reset bypass, mandatory retake reason, fresh retake allowance, timed pause blocks answers/early resume, resumes exactly once and preserves notes.');
+
+console.log('PASS: fifteen-minute server token expiry, bound active sessions, second-device denial, browser violation lock, saved answer and one-use shared-token unlock.');
 
 }
 
@@ -491,4 +516,30 @@ await call('saveBank',{period,data:{title:'Bukan unitnya',unit:'SMP',grade:'1',s
 const d=await call('saveDraft',{period,data:{title:'Draft yang dibuang',questions:q}});assert((await state(period)).drafts.some(x=>x.id===d.id));
 await call('deleteDraft',{period,id:d.id});assert(!(await state(period)).drafts.some(x=>x.id===d.id));
 console.log('PASS: SD homeroom can author other subjects for own grade, sees own bank, other grade/unit denied, server draft removed.');
+}
+
+// Rev6 role matrix uses isolated schedules in all three school units.
+{
+cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+const period={year:'2044/2045',semester:1};await call('saveYear',{data:{name:period.year}});await seedYearSubjects(period.year);
+for(const unit of ['SD','SMP','SMA']){
+ const suffix=unit.toLowerCase(),className=unit==='SD'?'6 QA':'1 QA';
+ await writeRecord('r6-admin-'+suffix,'staff',{name:'Admin '+unit,email:'r6-admin-'+suffix+'@test.invalid',role:'Admin Unit',unit});
+ await writeRecord('r6-class-'+suffix,'class',{name:className,unit,grade:unit==='SD'?'6':'1',year:period.year});
+ await writeRecord('r6-pupil-'+suffix,'student',{name:'Peserta '+unit,nis:'R6-'+unit,unit,className,year:period.year});
+ await writeRecord('r6-bank-'+suffix,'bank',{title:'Paket '+unit,unit,subject:'Matematika',questions:[{id:'r6-q',type:'PG',text:'2+2?',options:['4','5'],key:'0',points:10}]});
+ await writeRecord('r6-exam-'+suffix,'exam',{title:'Ujian '+unit,topic:'QA',unit,className,subject:'Matematika',year:period.year,semester:1,bankId:'r6-bank-'+suffix,status:'Aktif',start:new Date(Date.now()-10000).toISOString(),end:new Date(Date.now()+3600000).toISOString(),duration:30,duties:unit==='SD'?[{staffId:'r6-proctor',role:'proctor'}]:[]});
+}
+await writeRecord('r6-proctor','staff',{name:'Pengawas SD',email:'r6-proctor@test.invalid',role:'Guru',unit:'SD',year:period.year,assignments:[],subject:''});
+assert.equal((await state(period)).exams.length,3);
+for(const unit of ['SD','SMP','SMA']){
+ user={email:'r6-admin-'+unit.toLowerCase()+'@test.invalid',displayName:'Admin '+unit};
+ const scoped=await state(period);assert.equal(scoped.exams.length,1);assert(scoped.exams[0].canMonitor&&scoped.exams[0].canManageAttempt&&scoped.exams[0].canProctor);
+ const other=unit==='SD'?'smp':'sd';await call('makeup',{period,examId:'r6-exam-'+other,studentId:'r6-pupil-'+other,reason:'Permintaan lintas unit ditolak',start:new Date().toISOString(),end:new Date(Date.now()+3600000).toISOString()},400);
+ await call('generateShared',{period,examId:'r6-exam-'+other},400);
+}
+user={email:'r6-proctor@test.invalid',displayName:'Pengawas SD'};
+const ps=await state(period);assert.equal(ps.exams.length,1);assert(ps.exams[0].canMonitor&&ps.exams[0].canProctor&&!ps.exams[0].canGrade);
+const makeup6=await call('makeup',{period,examId:'r6-exam-sd',studentId:'r6-pupil-sd',reason:'Siswa datang setelah ujian pertama selesai',start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});assert(makeup6.examId);assert(makeup6.token);
+console.log('PASS: Rev6 super admin sees three units, each unit admin only its unit, cross-unit retake/token denied, proctor only assigned class and can create reasoned follow-up without grading access.');
 }
