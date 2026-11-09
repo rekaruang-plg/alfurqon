@@ -561,3 +561,12 @@ await call('grade',{period,id:a.id,grades:Object.fromEntries(saved.questions.map
 assert.equal(JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(a.id).data).score,70);
 console.log('PASS: approved import saves all supported missing-key types and review warnings, retains review metadata, requires manual scores, rejects malformed options and out-of-range keys.');
 }
+{
+cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+const period={year:'2044/2045',semester:1};
+const q={id:'six-options-import',type:'PG_KOMPLEKS',text:'Pilih jawaban sesuai naskah.',options:['A','B','C','D','E','F'],key:'0,5',points:10,importReviewed:true};
+await call('saveBank',{period,data:{title:'SMA enam opsi dari Word',unit:'SMA',subject:'Matematika',grade:'2',additionalQuestionTypes:['PG_KOMPLEKS'],questions:[q]}});
+const saved=(await state(period)).banks.find(b=>b.title==='SMA enam opsi dari Word');assert.equal(saved.questions[0].options.length,6);assert.equal(saved.questions[0].key,'0,5');
+await call('saveBank',{period,data:{title:'Terlalu banyak opsi',unit:'SMA',subject:'Matematika',grade:'2',additionalQuestionTypes:['PG_KOMPLEKS'],questions:[{...q,options:[...q.options,'G']}]}},400);
+console.log('PASS: six source options are preserved for SMA; seven options still rejected.');
+}
