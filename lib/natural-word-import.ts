@@ -11,19 +11,19 @@ type Kind='PG'|'PG_KOMPLEKS'|'ISIAN'|'URAIAN'|'MENJODOHKAN';
 export type ImportedQuestion=Question&{sourceLabel:string;importIssues:string[];importReviewed:boolean;importSource:string};
 type Block={node:Element;text:string;plain:string;fmt:string;number:number;pattern:string;listId:string;images:string[];boxes:boolean;table:boolean;marked:boolean;markedText:string;cardNumber?:string;cardKey?:string;inferred?:boolean;blueprint?:{id:string;numbers:string[];points:number[]}};
 function section(text:string):Kind|undefined {
- const t=text.trim().toUpperCase().replace(/\s+/g,' ').replace(/^(?:PART\s+[IVX]+|BAGIAN\s+\d+)[.:]?\s*/, '').replace(/^(?:[A-DIVX]+[.)]\s*)?(?:SOAL\s*)?/, '');
+ const t=text.trim().toUpperCase().replace(/MULTIPLE-CHOICE/g,'MULTIPLE CHOICE').replace(/\s+/g,' ').replace(/^(?:PART\s+[IVX]+|BAGIAN\s+\d+)[.:]?\s*/, '').replace(/^(?:[A-DIVX]+[.)]\s*)?(?:SOAL\s*)?/, '');
  if(/^(?:PILIHAN GANDA KOMPLEKS?|COMPLEX MULTIPLICATION|COMPLEX MULTIPLE CHOICE|MCMA)/.test(t))return 'PG_KOMPLEKS';
  if(/^(?:PILIHAN GANDA|PILHAN GANDA|MULTIPLE CHOICE)/.test(t))return 'PG';
  if(/^(?:MENJODOHKAN)/.test(t.replace(/^SOAL\s*/,'')))return 'MENJODOHKAN';
  if(/^(?:MENCOCOKKAN)/.test(t))return 'ISIAN';
- if(/^JAWABLAH\s*(?:DENGAN|PERTANYAAN)/.test(t))return 'URAIAN';
+ if(/^JAWABLAH\s*(?:DENGAN|PERTANYAAN|SECARA)/.test(t))return 'URAIAN';
  if(/^(?:ISIAN\s*(?:SINGKAT)?|SHORT QUESTION|SHORT ANSWER)/.test(t))return 'ISIAN';
  if(/^(?:ESSAI|ESSAYS?|ESAI|URAIAN)(?:\s*(?:QUESTIONS?|ANSWER|SOAL|BOBOT|PKWU|KELAS|\d|\(|\/).*)?$/.test(t))return 'URAIAN';
 }
 const manualNumber=(b:Block)=>b.fmt?null:b.plain.match(/^\s*Soal\s+(\d+)\s*(.+)/i)||b.plain.match(/^\s*(?:Soal\s+)?(\d{1,3})(?:\s*[.),]\s*|\s+(?=[A-Za-z].{15}))(\S[\s\S]*)/i);
-const autoNumber=(b:Block)=>b.fmt==='decimal'&&!b.pattern.startsWith('(')&&b.plain.trim().length>1;
-const optionPattern=/(?:^|[\t\n ]|(?<=\d))(\*?)([a-f])[.)]\s*/gi;
-const optionBlock=(b:Block)=>['lowerLetter','upperLetter','bullet'].includes(b.fmt)||/^\s*\*?[a-f][.)]\s+/i.test(b.plain);
+const autoNumber=(b:Block)=>b.fmt==='decimal'&&!/^\s*\*?[A-F][.)]\s+/i.test(b.plain)&&!b.pattern.startsWith('(')&&b.plain.trim().length>1;
+const optionPattern=/(?:^|[\t\n ]|(?<=\d))(\*?)\s*([a-f])[.)]\s*/gi;
+const optionBlock=(b:Block)=>['lowerLetter','upperLetter','bullet'].includes(b.fmt)||/^\s*(?:[☐□√✓✔]|\*?[a-f][.)]\s+)/i.test(b.plain);
 const answerLabel=/^(?:kunci\s+jawaban(?:\s*&\s*rubrik\s*penilaian)?|jawaban|jawab|answer)\s*:/i;
 
 const labels:Record<Kind,string>={PG:'PG',PG_KOMPLEKS:'PG kompleks',ISIAN:'Isian',URAIAN:'Uraian',MENJODOHKAN:'Menjodohkan'};
@@ -81,18 +81,29 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
   }
   await addBlock(node);
  }
+ // A paragraph can contain the final option and the next numbered stem.
+ for(let i=0;i<blocks.length;i++){
+  const b=blocks[i];if(b.fmt||!/^\s*\*?[e-f][.)]\s+/i.test(b.plain))continue;
+  const m=b.text.match(/\s+(\d{1,3})\s*[.)]\s+([A-Z][\s\S]{25,})$/);
+  if(!m||!/^\s*\*?a[.)]\s+/i.test(blocks.slice(i+1).find(x=>x.text)?.plain||''))continue;
+  const split=m.index!,tail=b.text.slice(split).trim();const prefix=b.text.slice(0,split).trim();
+  const tailPlain=b.plain.match(/\s+\d{1,3}\s*[.)]\s+[A-Z][\s\S]{25,}$/);
+  blocks.splice(i+1,0,{...b,text:tail,plain:tailPlain?.[0].trim()||tail,marked:false,markedText:''});
+  b.text=prefix;b.plain=tailPlain?b.plain.slice(0,tailPlain.index).trim():prefix;
+ }
+ if(blocks.some(b=>b.fmt==='decimal'&&/^\s*\*?[A-F][.)]\s+/i.test(b.plain)))warnings.push('Ada pilihan jawaban yang memakai nomor otomatis soal. Pilihan dipertahankan sebagai opsi; jumlah pertanyaan dapat berbeda dari nomor terakhir Word.');
  const header=blocks.filter(b=>b.text).slice(0,20).map(b=>b.text).join('\n');const subject=/BAHASA\s*ARAB/i.test(header)?'Bahasa Arab':/MATEMATIKA/i.test(header)?'Matematika':/BAHASA\s*INGGRIS/i.test(header)?'Bahasa Inggris':'';
  const mode=subject==='Bahasa Arab'?'ARAB':subject==='Matematika'?'MATEMATIKA':'TEKS';
  const sections:Array<{type:Kind;blocks:Block[]}>=[];let current:typeof sections[number]|undefined,keyStart=blocks.length,footer=false;
  // A missing first heading must not discard the multiple-choice pages.
- let firstQuestion=blocks.findIndex((b,i)=>(autoNumber(b)||manualNumber(b))&&blocks.slice(i+1,i+9).some(optionBlock)&&!/^PETUN|^(?:Sebelum|Setelah|Isikan|Tuliskan|Pilih|Tulisakan|Jawaban)\b/i.test(b.plain));
+ let firstQuestion=blocks.findIndex((b,i)=>(autoNumber(b)||manualNumber(b))&&blocks.slice(i+1,i+9).some(optionBlock)&&!/^PETUN|^(?:Sebelum|Setelah|Isi|Isikan|Tuliskan|Pilih|Tulisakan|Jawaban)\b/i.test(b.plain));
  if(firstQuestion<0)firstQuestion=blocks.findIndex(b=>section(b.plain));if(firstQuestion<0)firstQuestion=0;const firstHeading=blocks.findIndex(b=>section(b.plain));const earlyHeading=firstHeading>=0&&firstHeading<firstQuestion;if(earlyHeading)firstQuestion=firstHeading;
  let implicitStart=firstQuestion;
- while(implicitStart>0){const prev=blocks[implicitStart-1];if(!prev.text){implicitStart--;continue;}if((prev.fmt&&prev.fmt!=='bullet')||prev.table||section(prev.plain)||/^(?:PETUN|(?:Sebelum|Setelah|Isikan|Tuliskan|Pilih|Tulisakan)\b|(?:CP|TP)\s*[.\d]|\d+\.\d+|Mata Pelajaran|Bahasa Inggris$)/i.test(prev.plain))break;implicitStart--;}
+ while(implicitStart>0){const prev=blocks[implicitStart-1];if(!prev.text){implicitStart--;continue;}if((prev.fmt&&prev.fmt!=='bullet')||prev.table||section(prev.plain)||/^(?:PETUN|(?:Sebelum|Setelah|Isi|Isikan|Tuliskan|Pilih|Tulisakan)\b|(?:CP|TP)\s*[.\d]|\d+\.\d+|Mata Pelajaran|Bahasa Inggris$)/i.test(prev.plain))break;implicitStart--;}
  for(let i=0;i<blocks.length;i++){
   const b=blocks[i];
   if(/^KUNCI\s*JAWABAN(?:\s+(?:ESAI|ESSAI|ESSAY|PILIHAN|ISIAN)|\s*$)/i.test(b.plain)&&!answerLabel.test(b.plain)){keyStart=i;break;}
-  const type=section(b.plain);if(type){footer=false;if(!current||current.type!==type||current.blocks.some(x=>autoNumber(x)||manualNumber(x))){current={type,blocks:[]};sections.push(current);}continue;}
+  const type=section(b.plain);if(footer&&/^Jawablah\b/i.test(b.plain)){warnings.push('Ada salinan/lampiran setelah halaman tanda tangan. Periksa dokumen asli; bagian setelah tanda tangan tidak dimasukkan tanpa judul bagian baru.');continue;}if(type){footer=false;if(!current||current.type!==type||current.blocks.some(x=>autoNumber(x)||manualNumber(x))){current={type,blocks:[]};sections.push(current);}continue;}
   if(/^(ALHAMDULILLAH|معكم النجاح|Mengetahui)/i.test(b.plain)){footer=true;current=undefined;continue;}if(footer)continue;
   if(!current&&i>=implicitStart&&!(earlyHeading&&i<firstHeading)){current={type:'PG',blocks:[]};sections.push(current);}
   if(current&&(b.text||['lowerLetter','upperLetter'].includes(b.fmt)&&blocks.slice(Math.max(0,i-4),i+5).some(x=>x.images.length))&&!(!b.fmt&&/^(?:CP|TP)\s*[.\d]|^\d+\.\d+\s+[A-Za-z]/i.test(b.plain)))current.blocks.push(b);
@@ -119,6 +130,7 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
    const b=group.blocks[bi];
    const range=b.plain.match(/(?:no\.?|numbers?|questions?|nomor|soal)\s*(\d+)(?:\s*(?:and|[-–—]|to|sampai|dan)\s*(\d+))?/i);
    const sharedCue=!autoNumber(b)&&(/^(?:(?:this|the)\s+(?:text|data)\s+for|text\s+(?:\d+|for)|read\b.*(?:text|passage|following|excerpt)|(?:direction:.*)?answer.*based on the text|bacalah\b|perhatikan\s+(?:teks|bacaan)|(?:teks|bacaan)\s+(?:berikut|untuk))/i.test(b.plain));
+   if(/^Direction:\s*For questions/i.test(b.plain))continue;
    if(sharedCue){
     if(range&&Number(range[1])!==chunks.length+1)warnings.push('Ada rujukan nomor bacaan yang berbeda dari urutan soal. Bacaan ditempatkan pada soal sesudahnya; periksa nomor rujukan di teks.');
     if(collectShared&&shared&&!range){shared.blocks.push(b);continue;}
@@ -159,6 +171,7 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
    const blueprint=source.find(b=>b.blueprint)?.blueprint;
    if(blueprint){const position=blueprintUsed.get(blueprint.id)||0;blueprintUsed.set(blueprint.id,position+1);if(blueprint.numbers[position])q.sourceLabel=labels[group.type]+' '+blueprint.numbers[position];if(blueprint.points.length===blueprint.numbers.length&&blueprint.points[position]>0)q.points=blueprint.points[position];}
    if(source.some(b=>b.inferred))q.importIssues.push('Nomor soal tidak tertulis. Soal dipisahkan berdasarkan awal pilihan A; cocokkan nomor dengan Word.');
+   const choiceIntro=source.findIndex((b,i)=>i>0&&/pilih(?:lah)?\s+(?:dua|tiga|[2-5])\s+(?:pernyataan|jawaban).*benar/i.test(b.plain));
    const firstLetter=source.findIndex((b,i)=>i>0&&(['lowerLetter','upperLetter'].includes(b.fmt)||/^\s*\*?[a-f][.)]\s*/i.test(b.plain)));
    const rawOptions=new Map<number,string>(),markedOptions=new Set<number>(),explicitOptions=new Set<number>(),stem:string[]=[];let optionIndex=-1,seenFirst=false,answerMode=false;const answer:string[]=[];
    for(const b of source){let t=b.text;
@@ -168,9 +181,10 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
     if(answerMode){answer.push(t);continue;}
     if(/^[.\s…_]+$/.test(b.plain)&&!b.images.length)continue;
     if(group.type==='PG'||group.type==='PG_KOMPLEKS'){
+     if(choiceIntro>0&&source.indexOf(b)<=choiceIntro){stem.push(t);continue;}
      const automatic=['lowerLetter','upperLetter'].includes(b.fmt)&&b!==first;
      if(automatic)t=t.replace(/^\s*[A-F][.)]\s*/,'');if(automatic)t=String.fromCharCode(97+rawOptions.size)+'. '+t;
-     let matches=[...t.matchAll(optionPattern)];if(matches.length===1&&t.slice(0,matches[0].index).trim())matches=[];
+     let matches=[...t.matchAll(optionPattern)];if(matches.length===1&&t.slice(0,matches[0].index).trim()&&!(b===first&&matches[0][2].toLowerCase()==='a'&&source.some(x=>/^\s*\*?b[.)]\s+/i.test(x.plain))))matches=[];
      if(matches.length){
       const prefix=t.slice(0,matches[0].index).trim();if(prefix)stem.push(prefix);
       for(let m=0;m<matches.length;m++){
@@ -215,6 +229,20 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
    const replace=(s:string)=>s.replace(/\[\[asset:(\d+)\]\]/g,(_,n)=>'[[image:'+ids.indexOf(Number(n))+']]');q.images=ids.map(n=>assets[n]);q.text=replace(q.text);if(q.stimulus)q.stimulus=replace(q.stimulus);q.options=q.options.map(replace);q.key=replace(q.key);q.importSource=replace(q.importSource);
    if(ids.length>8)q.importIssues.push('Lebih dari 8 gambar dalam satu soal. Kurangi gambar sebelum menyimpan.');
    questions.push(q);bySection.set(group.type,[...(bySection.get(group.type)||[]),q]);
+  }
+ }
+ // Later English sections can refer back to earlier texts without repeating them.
+ // Preserve the complete reference set rather than guessing one passage from keywords.
+ if(subject==='Bahasa Inggris'){
+  const refs=[...new Map(questions.filter(q=>q.stimulus&&q.stimulusId&&q.type==='PG').map(q=>[q.stimulusId,q])).values()];
+  const orphaned=questions.filter(q=>!q.stimulus&&q.type==='PG_KOMPLEKS');
+  if(refs.length&&orphaned.length){
+   const id=crypto.randomUUID();
+   for(const q of orphaned){
+    const images=[...(q.images||[])];
+    q.stimulus=refs.map(ref=>(ref.stimulus||'').replace(/\[\[image:(\d+)\]\]/g,(_,n)=>{const src=ref.images?.[Number(n)];if(!src)return '[PERIKSA GAMBAR]';let at=images.indexOf(src);if(at<0){at=images.length;images.push(src);}return '[[image:'+at+']]';})).join('\n\n');
+    q.images=images;q.stimulusId=id;q.importIssues.push('Bagian ini merujuk bacaan sebelumnya. Seluruh bacaan disertakan; pilih bacaan yang sesuai saat meninjau paket.');
+   }
   }
  }
  // Read answer tables only after the explicit answer-key heading. Never append them to stems.
