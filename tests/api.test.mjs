@@ -543,3 +543,21 @@ const ps=await state(period);assert.equal(ps.exams.length,1);assert(ps.exams[0].
 const makeup6=await call('makeup',{period,examId:'r6-exam-sd',studentId:'r6-pupil-sd',reason:'Siswa datang setelah ujian pertama selesai',start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});assert(makeup6.examId);assert(makeup6.token);
 console.log('PASS: Rev6 super admin sees three units, each unit admin only its unit, cross-unit retake/token denied, proctor only assigned class and can create reasoned follow-up without grading access.');
 }
+// Import approval permits warnings and missing keys, with explicit manual grading.
+{
+cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+const period={year:'2044/2045',semester:1};
+const questions=[{id:'approve-pg',type:'PG',text:'Pertanyaan hasil impor',options:['Satu','Dua'],key:'',points:10,sourceLabel:'1',importIssues:['Kunci belum ditemukan']},{id:'approve-match',type:'MENJODOHKAN',text:'Pasangkan',options:[],left:['A'],right:['B'],key:'',points:10,sourceLabel:'2'},{id:'approve-multi',type:'PG_KOMPLEKS',text:'Pilih beberapa',options:['A','B'],key:'',points:10,sourceLabel:'3'},{id:'approve-essay',type:'URAIAN',text:'Jelaskan [PERIKSA RUMUS]',options:[],key:'',points:10,sourceLabel:'4'}];
+const pkg={title:'Paket persetujuan impor',unit:'SD',subject:'Matematika',grade:'6',additionalQuestionTypes:['PG','PG_KOMPLEKS','MENJODOHKAN','URAIAN'],questions};
+await call('saveBank',{period,data:pkg},400);
+await call('saveBank',{period,data:{...pkg,questions:questions.map(q=>({...q,importReviewed:true}))}});
+const saved=(await state(period)).banks.find(b=>b.title===pkg.title);assert(saved.questions.every(q=>q.manualGrading&&q.importReviewed));assert.equal(model.mark(saved.questions,{})['approve-pg'],null);
+await call('saveBank',{period,data:{...pkg,title:'Invalid structure',questions:[{...questions[0],options:[],importReviewed:true}]}},400);
+await call('saveBank',{period,data:{...pkg,title:'Invalid key',questions:[{...questions[0],key:'99',importReviewed:true}]}},400);
+const a={id:'approve-attempt',studentId:'r6-pupil-sd',examId:'r6-exam-sd',status:'Dikumpulkan',questions:saved.questions,answers:{'approve-pg':'1'},grades:model.mark(saved.questions,{}),published:false};
+sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)').run(a.id,a.studentId,a.examId,'approve-test-token',JSON.stringify(a));
+await call('grade',{period,id:a.id,grades:{}},400);
+await call('grade',{period,id:a.id,grades:Object.fromEntries(saved.questions.map(q=>[q.id,7]))});
+assert.equal(JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(a.id).data).score,70);
+console.log('PASS: approved import saves all supported missing-key types and review warnings, retains review metadata, requires manual scores, rejects malformed options and out-of-range keys.');
+}

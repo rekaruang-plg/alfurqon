@@ -1,5 +1,5 @@
 import {keywordScore,written} from './review-policy';
-export type Question={presentation?:string;stimulusId?:string;stimulus?:string;caseSensitive?:boolean;format?:string;sourceLabel?:string;importIssues?:string[];importReviewed?:boolean;importSource?:string;scope?:string;sourceId?:string;keywords?:string;images?:string[];id:string;type:'PG'|'PG_KOMPLEKS'|'URAIAN'|'ISIAN'|'MENJODOHKAN';text:string;options:string[];key:string;points:number;mode:string;left?:string[];right?:string[]};
+export type Question={manualGrading?:boolean;presentation?:string;stimulusId?:string;stimulus?:string;caseSensitive?:boolean;format?:string;sourceLabel?:string;importIssues?:string[];importReviewed?:boolean;importSource?:string;scope?:string;sourceId?:string;keywords?:string;images?:string[];id:string;type:'PG'|'PG_KOMPLEKS'|'URAIAN'|'ISIAN'|'MENJODOHKAN';text:string;options:string[];key:string;points:number;mode:string;left?:string[];right?:string[]};
 export const units=['SD','SMP','SMA'];
 export const starterQuestions:Question[]=[
 {id:'q1',type:'PG',text:'Hasil dari 12 × 8 adalah …',options:['86','96','108','112'],key:'1',points:20,mode:'TEKS'},
@@ -28,4 +28,4 @@ export function uniqueQuestionOrder<T extends {id:string;stimulusId?:string}>(it
 }
 export function choiceSet(value:string){return [...new Set(value.split(',').filter(v=>v!==''))].sort((a,b)=>Number(a)-Number(b)).join(',')}
 export function toggleChoice(value:string,index:number){const values=value?value.split(','):[];const key=String(index);return choiceSet((values.includes(key)?values.filter(x=>x!==key):[...values,key]).join(','))}
-export function mark(questions:Question[], answers:Record<string,string>){return Object.fromEntries(questions.map(q=>[q.id,written(q)?keywordScore(q,answers[q.id]):q.type==='PG'?(answers[q.id]===q.key?q.points:0):q.type==='PG_KOMPLEKS'?(choiceSet(answers[q.id]||'')===choiceSet(q.key)?q.points:0):(()=>{const keys=q.key.split(',');const got=(answers[q.id]||'').split(',');return keys.reduce((s,k,i)=>s+(k.trim()===got[i]?.trim()?q.points/keys.length:0),0)})()]))}
+export function mark(questions:Question[], answers:Record<string,string>){return Object.fromEntries(questions.map(q=>[q.id,q.manualGrading?null:written(q)?keywordScore(q,answers[q.id]):q.type==='PG'?(answers[q.id]===q.key?q.points:0):q.type==='PG_KOMPLEKS'?(choiceSet(answers[q.id]||'')===choiceSet(q.key)?q.points:0):(()=>{const keys=q.key.split(',');const got=(answers[q.id]||'').split(',');return keys.reduce((s,k,i)=>s+(k.trim()===got[i]?.trim()?q.points/keys.length:0),0)})()]))}
