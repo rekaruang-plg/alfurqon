@@ -570,3 +570,47 @@ const saved=(await state(period)).banks.find(b=>b.title==='SMA enam opsi dari Wo
 await call('saveBank',{period,data:{title:'Terlalu banyak opsi',unit:'SMA',subject:'Matematika',grade:'2',additionalQuestionTypes:['PG_KOMPLEKS'],questions:[{...q,options:[...q.options,'G']}]}},400);
 console.log('PASS: six source options are preserved for SMA; seven options still rejected.');
 }
+
+// REV.7: destructive academic operations and archived question lifecycle.
+{
+ cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+ const period={year:'2050/2051',semester:1},next={year:'2051/2052',semester:1};
+ await call('saveYear',{data:{name:period.year}});await call('saveYear',{data:{name:next.year}});
+ await writeRecord('rev7-student','student',{name:'Siswa dua tahun',nis:'70001',unit:'SD',className:'5 A',year:period.year});
+ await writeRecord('student-year:'+next.year+':rev7-student','student_year',{name:'Siswa dua tahun',nis:'70001',unit:'SD',className:'6 A',year:next.year});
+ await writeRecord('rev7-class','class',{name:'5 A',unit:'SD',grade:'5',year:period.year});
+ await writeRecord('rev7-subject','subject',{name:'Matematika',unit:'SD',year:period.year,grades:['5']});
+ const q={id:'rev7-q',type:'PG',text:'Satu tambah satu?',options:['1','2'],key:'1',points:10};
+ await writeRecord('rev7-bank','bank',{title:'Bank tetap',unit:'SD',subject:'Matematika',grade:'5',year:period.year,questions:[q]});
+ const semester2={...period,semester:2};assert.equal((await state(semester2)).students.find(s=>s.id==='rev7-student').className,'5 A');
+ await call('saveClass',{period:semester2,data:{name:'5 B',unit:'SD',grade:'5',year:period.year}});
+ await call('saveStudent',{period:semester2,data:{...(await state(semester2)).students.find(s=>s.id==='rev7-student'),className:'5 B'}});
+ assert.equal((await state(period)).students.find(s=>s.id==='rev7-student').className,'5 A');
+ await writeRecord('rev7-exam','exam',{year:period.year,semester:1,unit:'SD',className:'5 A',subject:'Matematika',bankId:'rev7-bank'});
+ await writeRecord('snapshot-rev7-exam','snapshot',{questions:[q]});
+ await writeRecord('shared-rev7-exam','shared_token',{issuedSlot:1});
+ const year=(await state(period)).years.find(y=>y.name===period.year);
+ user={email:'admin@example.test'};await call('deleteYear',{id:year.id,confirm:true},400);
+ user={email:'qa@example.test'};await call('deleteYear',{id:year.id},400);
+ await call('activateYear',{data:year});await call('deleteYear',{id:year.id,confirm:true});
+ assert(!(await record(year.id)));assert(!(await record('rev7-exam')));assert(!(await record('snapshot-rev7-exam')));assert(!(await record('shared-rev7-exam')));
+ assert(await record('rev7-bank'));assert.equal((await state(next)).students.find(s=>s.id==='rev7-student').className,'6 A');
+ assert.equal((await state(period)).students.length,0);assert.equal((await state(semester2)).students.length,0);
+ assert.equal((await state(period)).classes.length,0);assert.equal((await state(period)).subjects.length,0);
+ await writeRecord('rev7-bank','bank',{...(await record('rev7-bank')),deletedAt:Date.now(),retainQuestions:true});
+ await writeRecord('rev7-destination','bank',{title:'Tujuan',unit:'SD',subject:'Matematika',grade:'5',year:next.year,questions:[]});
+ const archived=()=>(sql.prepare('SELECT * FROM records WHERE id=?').get('rev7-bank'));
+ const version=()=>archived().version;
+ user={email:'admin@example.test'};await call('archiveQuestion',{bankId:'rev7-bank',version:version(),questionId:q.id,operation:'delete',confirm:true},400);
+ user={email:'qa@example.test'};
+ await call('archiveQuestion',{bankId:'rev7-bank',version:version()-1,questionId:q.id,operation:'edit',question:q},400);
+ await call('archiveQuestion',{bankId:'rev7-bank',version:version(),questionId:q.id,operation:'edit',question:{...q,text:'Dua tambah dua?'}});
+ const revised=(await record('rev7-bank')).questions[0];assert.notEqual(revised.id,q.id);assert.equal(revised.text,'Dua tambah dua?');
+ await call('archiveQuestion',{bankId:'rev7-bank',version:version(),questionId:revised.id,operation:'move',targetId:'rev7-destination',targetVersion:99,confirm:true},400);
+ assert.equal((await record('rev7-bank')).questions.length,1);
+ await call('archiveQuestion',{bankId:'rev7-bank',version:version(),questionId:revised.id,operation:'move',targetId:'rev7-destination',targetVersion:0,confirm:true});
+ assert.equal((await record('rev7-bank')).questions.length,0);assert.equal((await record('rev7-destination')).questions.length,1);
+ await writeRecord('rev7-bank','bank',{...(await record('rev7-bank')),questions:[q]});
+ await call('archiveQuestion',{bankId:'rev7-bank',version:version(),questionId:q.id,operation:'delete',confirm:true});assert.equal((await record('rev7-bank')).questions.length,0);
+ console.log('PASS: REV.7 year deletion is super-admin-only, removes both semesters and schedule artifacts, preserves question bank and later-year identity; archived edit/move/delete validates scope and versions.');
+}

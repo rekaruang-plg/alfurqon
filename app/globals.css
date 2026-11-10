@@ -34,3 +34,14 @@
 .option-edit-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.option-edit-row>input:not([type=radio]):not([type=checkbox]){flex:1}.option-edit-row section{margin:0;padding:6px}.option-edit-row input[type=file]{max-width:200px}.package-question{padding:20px 0;border-bottom:1px solid #ddd}.app-dialog:has(.package-question){width:min(900px,94vw)}.draft-row{display:flex;gap:12px;align-items:center;margin:14px 0}.draft-row strong{flex:1}
 
 .student-dashboard h2{margin-top:24px;margin-bottom:10px}.student-dashboard .tags span{font-size:12px;padding:6px 10px}.student-dashboard .tags{margin-top:12px;gap:8px;flex-wrap:wrap}
+
+/* REV.7: readable editing and consistent operational headers. */
+.rich-text-field{width:100%;min-width:0}
+.rich-text-field>label{display:block;width:100%}
+.rich-text-field>label>span{display:block;margin-bottom:8px}
+.rich-text-field textarea{display:block;width:100%;min-height:110px;resize:vertical;box-sizing:border-box}
+.option-edit-row .rich-text-field{flex:1;min-width:0}
+.import-review.review-pending{background:#fff4d6;color:#734700;border:1px solid #e9b64c}
+.import-review.review-approved{background:#e8f6ed;color:#175c37;border:1px solid #82c99d}
+.sort-header{border:0!important;background:transparent!important;box-shadow:none!important;padding:0!important;border-radius:0!important;color:inherit!important;font:inherit!important;min-height:0!important}
+.sort-header:focus-visible{outline:2px solid #167149;outline-offset:4px}
