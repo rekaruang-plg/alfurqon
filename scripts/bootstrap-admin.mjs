@@ -10,6 +10,6 @@ const key=await webcrypto.subtle.importKey('raw',new TextEncoder().encode(passwo
 const hash=Buffer.from(await webcrypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:100000,hash:'SHA-256'},key,256)).toString('hex');
 const quote=s=>"'"+String(s).replaceAll("'","''")+"'";
 const rows=[['installation','config',{createdAt:Date.now()}],[id,'staff',{name,email,role:'Super Admin',unit:'Semua',permission:'Full akses',disabled:false,demo:false}],['credential-'+username,'credential',{staffId:id,username,salt,hash,revision}]];
-const sql=rows.map(([id,kind,data])=>`INSERT INTO records(id,kind,data) VALUES(${quote(id)},${quote(kind)},${quote(JSON.stringify(data))});`).join('\n')+'\n';
+const sql='BEGIN;\nSET LOCAL search_path=pg_catalog,cbt;\n'+rows.map(([id,kind,data])=>`INSERT INTO records(id,kind,data) VALUES(${quote(id)},${quote(kind)},${quote(JSON.stringify(data))});`).join('\n')+'\nCOMMIT;\n';
 writeFileSync(process.env.CBT_BOOTSTRAP_OUTPUT||'bootstrap-admin.sql',sql,{mode:0o600,flag:'wx'});
 console.log('SQL bootstrap ditulis. Terapkan hanya ke database baru; jangan commit file ini. Password tidak dicetak.');

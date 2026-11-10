@@ -6,14 +6,13 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev --port 5173",
-    "build": "vinext build",
-    "start": "wrangler dev --config dist/server/wrangler.json --local",
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
     "check": "tsc --noEmit",
     "test": "node tests/api.test.mjs && node tests/bootstrap.test.mjs && node tests/word-template.test.mjs",
     "db:generate": "drizzle-kit generate",
-    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
-    "deploy": "node scripts/check-deploy.mjs && wrangler deploy --config dist/server/wrangler.json"
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -43,7 +42,8 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
     "vaul": "^1.1.2",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "postgres": "3.4.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

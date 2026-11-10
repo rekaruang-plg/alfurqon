@@ -1,10 +1,11 @@
-import {env} from 'cloudflare:workers';
+import {sameOrigin} from '../../../lib/request-origin';
+import {env} from '../../../lib/production-db';
 import {staffActor} from '../../../lib/staff-auth';
 export async function POST(req:Request){
  try{
   const {staff}=await staffActor(req);
   if(!staff||!['Guru','Admin Unit','Super Admin'].includes(staff.role))return Response.json({error:'Masuk sebagai guru atau pengelola terlebih dahulu.'},{status:403});
-  if(req.headers.get('origin')&&req.headers.get('origin')!==new URL(req.url).origin)return Response.json({error:'Permintaan tidak diizinkan.'},{status:403});
+  if(req.headers.get('origin')&&!sameOrigin(req))return Response.json({error:'Permintaan tidak diizinkan.'},{status:403});
   const config=env as unknown as {WORD_CONVERTER_URL?:string;WORD_CONVERTER_TOKEN?:string};
   if(!config.WORD_CONVERTER_URL||!config.WORD_CONVERTER_TOKEN)return Response.json({error:'Konversi .doc belum diaktifkan di server ini. Buka file di Word, pilih Simpan Sebagai → .docx, lalu unggah kembali. Isi dan format naskah tetap boleh seperti biasa.'},{status:503});
   if(Number(req.headers.get('content-length'))>10_000_000)return Response.json({error:'Maksimal Word 10 MB.'},{status:413});

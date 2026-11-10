@@ -45,3 +45,5 @@
 .import-review.review-approved{background:#e8f6ed;color:#175c37;border:1px solid #82c99d}
 .sort-header{border:0!important;background:transparent!important;box-shadow:none!important;padding:0!important;border-radius:0!important;color:inherit!important;font:inherit!important;min-height:0!important}
 .sort-header:focus-visible{outline:2px solid #167149;outline-offset:4px}
+
+.student-account-actions{display:flex;align-items:center;gap:.5rem;margin-left:auto}.incorrect-response{color:#a51d20;background:#fff2f2}.field input.manual-pending{background:#ffdfac;border-color:#b76b12}.field input.manual-filled{background:white}

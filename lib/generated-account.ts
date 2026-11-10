@@ -1,7 +1,7 @@
 import {record,records,writeRecord,authDB} from './staff-auth';
 import {passwordHash,randomSecret} from './password';
 import {sealToken,openToken} from './token-vault';
-import {env} from 'cloudflare:workers';
+import {env} from './production-db';
 export function standardPassword(identifier:unknown=''){const draw=(alphabet:string)=>{const limit=256-256%alphabet.length;let n;do{n=crypto.getRandomValues(new Uint8Array(1))[0];}while(n>=limit);return alphabet[n%alphabet.length];};let digits=String(identifier||'').replace(/[^0-9]/g,'').slice(-5);while(digits.length<5)digits+=draw('0123456789');return digits+Array.from({length:3},()=>draw('abcdefghijklmnopqrstuvwxyz')).join('');}
 export async function generatedAccount(person:any,student=false,demo=false,reset=false){
 const principal=student?'student-login-'+(demo?'demo-':'')+person.id:person.id;

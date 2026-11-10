@@ -1,4 +1,4 @@
-import {env} from 'cloudflare:workers';
+import {env} from './production-db';
 import {getChatGPTUser} from '../app/chatgpt-auth';
 import {digest} from './password';
 export const authDB=()=>env.DB!;
