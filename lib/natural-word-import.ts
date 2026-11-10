@@ -7,11 +7,12 @@ const descendants=(e:Element|Document,name:string)=>Array.from(e.getElementsByTa
 const value=(e:Element|undefined,name='val')=>e?.getAttributeNS(W,name)||e?.getAttribute('w:'+name)||'';
 const clean=(s:string)=>s.replace(/\u00a0/g,' ').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
 const comparable=(s:string)=>s.normalize('NFKC').replace(/[\u064B-\u065F\u0670\u0640\s\p{P}]/gu,'').toLowerCase();
-type Kind='PG'|'PG_KOMPLEKS'|'ISIAN'|'URAIAN'|'MENJODOHKAN';
+type Kind='PG'|'PG_KOMPLEKS'|'ISIAN'|'URAIAN'|'MENJODOHKAN'|'KATEGORI';
 export type ImportedQuestion=Question&{sourceLabel:string;importIssues:string[];importReviewed:boolean;importSource:string};
-type Block={node:Element;text:string;plain:string;fmt:string;number:number;pattern:string;listId:string;images:string[];boxes:boolean;table:boolean;marked:boolean;markedText:string;cardNumber?:string;cardKey?:string;inferred?:boolean;blueprint?:{id:string;numbers:string[];points:number[]}};
+type Block={layoutStart?:boolean;node:Element;text:string;plain:string;fmt:string;number:number;pattern:string;listId:string;images:string[];boxes:boolean;table:boolean;marked:boolean;markedText:string;cardNumber?:string;cardKey?:string;inferred?:boolean;blueprint?:{id:string;numbers:string[];points:number[]}};
 function section(text:string):Kind|undefined {
  const t=text.trim().toUpperCase().replace(/MULTIPLE-CHOICE/g,'MULTIPLE CHOICE').replace(/\s+/g,' ').replace(/^(?:PART\s+[IVX]+|BAGIAN\s+\d+)[.:]?\s*/, '').replace(/^(?:[A-DIVX]+[.)]\s*)?(?:SOAL\s*)?/, '');
+ if(/^PILIHAN GANDA.*KATEGORI/.test(t))return 'KATEGORI';
  if(/^(?:PILIHAN GANDA KOMPLEKS?|COMPLEX MULTIPLICATION|COMPLEX MULTIPLE CHOICE|MCMA)/.test(t))return 'PG_KOMPLEKS';
  if(/^(?:PILIHAN GANDA|PILHAN GANDA|MULTIPLE CHOICE)/.test(t))return 'PG';
  if(/^(?:MENJODOHKAN)/.test(t.replace(/^SOAL\s*/,'')))return 'MENJODOHKAN';
@@ -20,13 +21,13 @@ function section(text:string):Kind|undefined {
  if(/^(?:ISIAN\s*(?:SINGKAT)?|SHORT QUESTION|SHORT ANSWER)/.test(t))return 'ISIAN';
  if(/^(?:ESSAI|ESSAYS?|ESAI|URAIAN)(?:\s*(?:QUESTIONS?|ANSWER|SOAL|BOBOT|PKWU|KELAS|\d|\(|\/).*)?$/.test(t))return 'URAIAN';
 }
-const manualNumber=(b:Block)=>b.fmt?null:b.plain.match(/^\s*Soal\s+(\d+)\s*(.+)/i)||b.plain.match(/^\s*(?:Soal\s+)?(\d{1,3})(?:\s*[.),]\s*|\s+(?=[A-Za-z].{15}))(\S[\s\S]*)/i);
+const manualNumber=(b:Block)=>b.fmt?null:b.plain.match(/^\s*Soal\s+(\d+)\s*(.+)/i)||b.plain.match(/^\s*(?:Soal\s+)?(\d{1,3})(?:\s*[.),]\s*|\s+(?=[A-Za-z].{15}))([\s\S]*)/i);
 const autoNumber=(b:Block)=>b.fmt==='decimal'&&!/^\s*\*?[A-F][.)]\s+/i.test(b.plain)&&!b.pattern.startsWith('(')&&b.plain.trim().length>1;
 const optionPattern=/(?:^|[\t\n ]|(?<=\d))(\*?)\s*([a-f])[.)]\s*/gi;
 const optionBlock=(b:Block)=>['lowerLetter','upperLetter','bullet'].includes(b.fmt)||/^\s*(?:[☐□√✓✔]|\*?[a-f][.)]\s+)/i.test(b.plain);
 const answerLabel=/^(?:kunci\s+jawaban(?:\s*&\s*rubrik\s*penilaian)?|jawaban|jawab|answer)\s*:/i;
 
-const labels:Record<Kind,string>={PG:'PG',PG_KOMPLEKS:'PG kompleks',ISIAN:'Isian',URAIAN:'Uraian',MENJODOHKAN:'Menjodohkan'};
+const labels:Record<Kind,string>={PG:'PG',PG_KOMPLEKS:'PG kompleks',ISIAN:'Isian',URAIAN:'Uraian',MENJODOHKAN:'Menjodohkan',KATEGORI:'Kategori'};
 export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:string)=>Promise<string>=shrinkImage,keyMarker:'auto'|'table'|'bold'|'highlight'|'none'='auto'){
  const prepared=await prepareWord(buffer),zip=await JSZip.loadAsync(prepared.buffer);const parse=(s:string)=>new DOMParser().parseFromString(s,'application/xml');
  const xml=parse(await zip.file('word/document.xml')!.async('string'));if(descendants(xml,'parsererror').length)throw Error('Struktur Word tidak dapat dibaca. Simpan ulang sebagai .docx.');
@@ -41,14 +42,47 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
   const boxes=descendants(n,'txbxContent');for(const box of boxes)result+='\n'+await joinChildren(box,drawings)+'\n';return result;
  }const t=await joinChildren(n,drawings);const vertical=value(descendants(n,'vertAlign')[0]);if(drawings&&name==='r'&&['subscript','superscript'].includes(vertical)&&t.trim())return '\\({}'+(vertical==='subscript'?'_':'^')+'{'+t.replace(/[{}%#&]/g,'\\$&')+'}\\)';return name==='p'?t+'\n':name==='tc'?t+'\t':name==='tr'?t+'\n':t;}
  async function joinChildren(e:Element,drawings:boolean){let out='';for(const c of elements(e))out+=await read(c,drawings);return out;}
- const blocks:Block[]=[];let documentFormat='Word sekolah',cardCount=0;
- async function addBlock(node:Element,meta:Partial<Block>={}){const text=clean(await read(node)).replace(/(\[\[asset:\d+\]\])(?:\s*\1)+/g,'$1');const plain=clean(await read(node,false));blocks.push({...meta,node,text,plain,...(node.localName==='p'?list(node):{fmt:'',number:0,pattern:'',listId:''}),images:[...text.matchAll(/\[\[asset:(\d+)\]\]/g)].map(m=>m[1]),boxes:descendants(node,'txbxContent').length>0,table:node.localName==='tbl',markedText:descendants(node,'r').filter(r=>descendants(r,'b').some(b=>!['0','false','off'].includes(value(b)))).map(r=>descendants(r,'t').map(t=>t.textContent||'').join('')).join(''),marked:descendants(node,'r').filter(r=>descendants(r,'t').some(t=>t.textContent?.trim())).some(r=>['auto','bold'].includes(keyMarker)?descendants(r,'b').some(b=>!['0','false','off'].includes(value(b))):keyMarker==='highlight'?descendants(r,'highlight').some(h=>!['none','white',''].includes(value(h)))||descendants(r,'color').some(c=>!['auto','000000','FFFFFF',''].includes(value(c))):false)});}
+ const blocks:Block[]=[];const layoutStarts=new WeakSet<Element>();let documentFormat='Word sekolah',cardCount=0;
+ async function addBlock(node:Element,meta:Partial<Block>={}){const text=clean(await read(node)).replace(/\[\s*\]/g,'\n☐ ').trim().replace(/(\[\[asset:\d+\]\])(?:\s*\1)+/g,'$1');const plain=clean(await read(node,false)).replace(/\[\s*\]/g,'\n☐ ').trim().replace(/^\.\s*(\d+)\s*[.]?\s*/,'$1. ');blocks.push({...meta,layoutStart:layoutStarts.has(node),node,text,plain,...(node.localName==='p'?list(node):{fmt:'',number:0,pattern:'',listId:''}),images:[...text.matchAll(/\[\[asset:(\d+)\]\]/g)].map(m=>m[1]),boxes:descendants(node,'txbxContent').length>0,table:node.localName==='tbl',markedText:descendants(node,'r').filter(r=>descendants(r,'b').some(b=>!['0','false','off'].includes(value(b)))).map(r=>descendants(r,'t').map(t=>t.textContent||'').join('')).join(''),marked:descendants(node,'r').filter(r=>descendants(r,'t').some(t=>t.textContent?.trim())).some(r=>['auto','bold'].includes(keyMarker)?descendants(r,'b').some(b=>!['0','false','off'].includes(value(b))):keyMarker==='highlight'?descendants(r,'highlight').some(h=>!['none','white',''].includes(value(h)))||descendants(r,'color').some(c=>!['auto','000000','FFFFFF',''].includes(value(c))):false)});}
  async function addText(text:string){const p=xml.createElementNS(W,'w:p'),r=xml.createElementNS(W,'w:r'),t=xml.createElementNS(W,'w:t');t.textContent=text;r.appendChild(t);p.appendChild(r);await addBlock(p);}
- let tableKind:Kind='PG';
- for(const node of elements(body)){
+ let tableKind:Kind='PG',keyTables=false;
+ const flow:Element[]=[];
+ // Some teachers put each whole question into one row of a layout table.
+ function expand(node:Element){
+  const rows=elements(node).filter(e=>e.localName==='tr');
+  if(node.localName==='tbl'&&!/PETUNJUK\s*UMUM/i.test(node.textContent||'')&&rows.length>=2&&rows.every(r=>elements(r).filter(e=>e.localName==='tc').length===1)){
+   for(const row of rows)for(const cell of elements(row).filter(e=>e.localName==='tc')){const children=elements(cell).filter(e=>['p','tbl'].includes(e.localName));const first=children.find(e=>descendants(e,'t').some(t=>t.textContent?.trim())||descendants(e,'drawing').length);if(first)layoutStarts.add(first);for(const child of children)expand(child);}
+  }else flow.push(node);
+ }
+ for(const node of elements(body))expand(node);
+ for(const node of flow){
   if(!['p','tbl'].includes(node.localName))continue;
-  if(node.localName==='p'){const kind=section(clean(await read(node,false)));if(kind)tableKind=kind;await addBlock(node);continue;}
-  const rows=elements(node).filter(e=>e.localName==='tr'),cardCells:Element[]=[];
+  if(node.localName==='p'){if(/^KUNCI\s*JAWABAN/i.test(clean(await read(node,false))))keyTables=true;const kind=section(clean(await read(node,false)));if(kind)tableKind=kind;await addBlock(node);continue;}
+  if(/PETUNJUK\s*UMUM/i.test(node.textContent||'')){await addBlock(node);continue;}
+  const rows=elements(node).filter(e=>e.localName==='tr').filter(r=>descendants(r,'t').some(t=>t.textContent?.trim())||descendants(r,'imagedata').length||descendants(r,'blip').length),cardCells:Element[]=[];
+  const tableRows=await Promise.all(rows.map(async row=>Promise.all(elements(row).filter(e=>e.localName==='tc').map(c=>read(c,false).then(clean)))));
+  // Answer choices stored as checkbox/content table rows.
+  if(!keyTables&&tableKind==='PG_KOMPLEKS'&&tableRows.length>=2&&tableRows.every(r=>r.length===2&&((/^[\s☐□√✓✔xX]*$/.test(r[0])&&r[1])||(/^[\s☐□√✓✔xX]*$/.test(r[1])&&r[0])))){
+   for(let k=0;k<rows.length;k++){
+    const cells=elements(rows[k]).filter(e=>e.localName==='tc');const contentIndex=tableRows[k][1]&&!/^[\s☐□√✓✔xX]*$/.test(tableRows[k][1])?1:0;await addBlock(cells[contentIndex]);const b=blocks.at(-1)!;
+    b.text=String.fromCharCode(65+k)+'. '+b.text;b.plain=String.fromCharCode(65+k)+'. '+b.plain;
+    if(/[√✓✔xX]/.test(tableRows[k][1-contentIndex])){b.text='*'+b.text;b.plain='*'+b.plain;}
+   }continue;
+  }
+  if(!keyTables&&tableKind==='PG_KOMPLEKS'&&tableRows.length===1&&tableRows[0].length>=2&&tableRows[0].length<=4){
+   const cells=elements(rows[0]).filter(e=>e.localName==='tc');for(let k=0;k<cells.length;k++){await addBlock(cells[k]);const b=blocks.at(-1)!;b.text=String.fromCharCode(65+k)+'. '+b.text;b.plain=String.fromCharCode(65+k)+'. '+b.plain;}continue;
+  }
+  if(!keyTables&&tableKind==='PG'&&tableRows.length>=2&&tableRows.every(r=>r.length>=2&&!r[0]&&r.slice(1).every(Boolean))){
+   for(let k=0;k<rows.length;k++){await addBlock(rows[k]);const b=blocks.at(-1)!;b.text=String.fromCharCode(65+k)+'. '+b.text;b.plain=String.fromCharCode(65+k)+'. '+b.plain;}continue;
+  }
+  // RTL Arabic option labels often occupy separate cells after their values.
+  const arabicLetters=['ا','أ','ب','ج','د'];const rtlOptions:Array<{label:number;cell:Element}>=[];
+  for(const row of rows){const cells=elements(row).filter(e=>e.localName==='tc');for(let k=1;k<cells.length;k++){
+   const label=clean(await read(cells[k],false)).match(/^([اأبجد])[.)]?$/);
+   if(label){const n=arabicLetters.indexOf(label[1]);rtlOptions.push({label:n<2?0:n-1,cell:cells[k-1]});}
+  }}
+  if(tableKind==='PG'&&rtlOptions.length>=2){for(const item of rtlOptions.sort((a,b)=>a.label-b.label)){await addBlock(item.cell);const b=blocks.at(-1)!;b.text=String.fromCharCode(65+item.label)+'. '+b.text;b.plain=String.fromCharCode(65+item.label)+'. '+b.plain;}continue;}
+
   for(const row of rows)for(const cell of elements(row).filter(e=>e.localName==='tc')){const text=await read(cell);if(/Butir\s*Soal\s*:/i.test(text)||/No\.?\s*Soal\s*\d+/i.test(text)&&/Kunci\s*Jawaban|Buku\s*Sumber|Tipe\s*Soal/i.test(text))cardCells.push(cell);}
   if(cardCells.length){
    documentFormat='Kartu soal Word';
@@ -96,20 +130,43 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
  const mode=subject==='Bahasa Arab'?'ARAB':subject==='Matematika'?'MATEMATIKA':'TEKS';
  const sections:Array<{type:Kind;blocks:Block[]}>=[];let current:typeof sections[number]|undefined,keyStart=blocks.length,footer=false;
  // A missing first heading must not discard the multiple-choice pages.
- let firstQuestion=blocks.findIndex((b,i)=>(autoNumber(b)||manualNumber(b))&&blocks.slice(i+1,i+9).some(optionBlock)&&!/^PETUN|^(?:Sebelum|Setelah|Isi|Isikan|Tuliskan|Pilih|Tulisakan|Jawaban)\b/i.test(b.plain));
- if(firstQuestion<0)firstQuestion=blocks.findIndex(b=>section(b.plain));if(firstQuestion<0)firstQuestion=0;const firstHeading=blocks.findIndex(b=>section(b.plain));const earlyHeading=firstHeading>=0&&firstHeading<firstQuestion;if(earlyHeading)firstQuestion=firstHeading;
+ let firstQuestion=blocks.findIndex((b,i)=>(autoNumber(b)||manualNumber(b))&&blocks.slice(i+1,i+9).some(optionBlock)&&!/^PETUN|^(?:Sebelum|Setelah|Isi|Isikan|Tuliskan|Pilih|Tulisakan|Jawaban)\b|^$/i.test(b.plain.replace(/^\s*\d+[.)]\s*/,'')));
+ if(firstQuestion<0)firstQuestion=blocks.findIndex(b=>section(b.plain));if(firstQuestion<0)firstQuestion=0;const firstHeading=blocks.findIndex(b=>section(b.plain));const earlyHeading=firstHeading>=0&&(firstHeading<firstQuestion||firstHeading-firstQuestion<20&&blocks.slice(firstQuestion,firstHeading).some(b=>/pengawas|identitas|petunjuk/i.test(b.plain)));if(earlyHeading)firstQuestion=firstHeading;
  let implicitStart=firstQuestion;
  while(implicitStart>0){const prev=blocks[implicitStart-1];if(!prev.text){implicitStart--;continue;}if((prev.fmt&&prev.fmt!=='bullet')||prev.table||section(prev.plain)||/^(?:PETUN|(?:Sebelum|Setelah|Isi|Isikan|Tuliskan|Pilih|Tulisakan)\b|(?:CP|TP)\s*[.\d]|\d+\.\d+|Mata Pelajaran|Bahasa Inggris$)/i.test(prev.plain))break;implicitStart--;}
  for(let i=0;i<blocks.length;i++){
   const b=blocks[i];
+  if(/^Kunci\s*Jawaban\s*:\s*\d+[.)]/i.test(b.plain)){keyStart=i;break;}
   if(/^KUNCI\s*JAWABAN(?:\s+(?:ESAI|ESSAI|ESSAY|PILIHAN|ISIAN)|\s*$)/i.test(b.plain)&&!answerLabel.test(b.plain)){keyStart=i;break;}
-  const type=section(b.plain);if(footer&&/^Jawablah\b/i.test(b.plain)){warnings.push('Ada salinan/lampiran setelah halaman tanda tangan. Periksa dokumen asli; bagian setelah tanda tangan tidak dimasukkan tanpa judul bagian baru.');continue;}if(type){footer=false;if(!current||current.type!==type||current.blocks.some(x=>autoNumber(x)||manualNumber(x))){current={type,blocks:[]};sections.push(current);}continue;}
+  const type=current?.type==='URAIAN'&&/^Jawablah\b/i.test(b.plain)?undefined:section(b.plain);if(footer&&/^Jawablah\b/i.test(b.plain)){warnings.push('Ada salinan/lampiran setelah halaman tanda tangan. Periksa dokumen asli; bagian setelah tanda tangan tidak dimasukkan tanpa judul bagian baru.');continue;}if(type){footer=false;if(!current||current.type!==type||current.blocks.some(x=>autoNumber(x)||manualNumber(x))){current={type,blocks:[]};sections.push(current);}continue;}
   if(/^(ALHAMDULILLAH|معكم النجاح|Mengetahui)/i.test(b.plain)){footer=true;current=undefined;continue;}if(footer)continue;
   if(!current&&i>=implicitStart&&!(earlyHeading&&i<firstHeading)){current={type:'PG',blocks:[]};sections.push(current);}
   if(current&&(b.text||['lowerLetter','upperLetter'].includes(b.fmt)&&blocks.slice(Math.max(0,i-4),i+5).some(x=>x.images.length))&&!(!b.fmt&&/^(?:CP|TP)\s*[.\d]|^\d+\.\d+\s+[A-Za-z]/i.test(b.plain)))current.blocks.push(b);
  }
  const questions:ImportedQuestion[]=[];const bySection=new Map<Kind,ImportedQuestion[]>(),blueprintUsed=new Map<string,number>();
  for(const group of sections){
+  if(group.type==='KATEGORI'){
+   let context:Block[]=[];let number=0;
+   for(const b of group.blocks){
+    if(!b.table){context.push(b);continue;}
+    const rows=elements(b.node).filter(e=>e.localName==='tr');
+    const cells=await Promise.all(rows.map(async r=>Promise.all(elements(r).filter(e=>e.localName==='tc').map(c=>read(c).then(clean)))));
+    const hi=cells.findIndex(r=>r.some(t=>/^(?:Pernyataan|Statement|Kalimat)(?:\s.*)?$/i.test(t)));
+    if(hi<0){context.push(b);continue;}
+    const headers=cells[hi],si=headers.findIndex(t=>/^(?:Pernyataan|Statement|Kalimat)(?:\s.*)?$/i.test(t));
+    const categories=headers.slice(si+1).filter(Boolean);
+    if(categories.length<2){context.push(b);continue;}
+    const data=cells.slice(hi+1).filter(r=>r[si]?.trim());const left=data.map(r=>r[si]);
+    const keys=data.map(r=>r.slice(si+1).flatMap((v,i)=>/[√✓✔xX]/.test(v.trim())?[i]:[])).map(a=>a.length===1?String(a[0]):'');
+    const stem=clean(context.map(x=>x.text).join('\n'))||'Tentukan kategori yang sesuai untuk setiap pernyataan.';
+    const all=stem+'\n'+b.text,ids=[...new Set(Array.from(all.matchAll(/\[\[asset:(\d+)\]\]/g),m=>Number(m[1])))];const replace=(t:string)=>t.replace(/\[\[asset:(\d+)\]\]/g,(_,n)=>'[[image:'+ids.indexOf(Number(n))+']]');
+    const key=keyMarker!=='none'&&keys.every(Boolean)?keys.join(','):'';
+    questions.push({id:crypto.randomUUID(),type:'MENJODOHKAN',presentation:'KATEGORI',text:replace(stem),options:[],left:left.map(replace),right:categories.map(replace),key,points:10,mode,images:ids.map(n=>assets[n]),sourceLabel:'Kategori '+(++number),importSource:replace(all),importReviewed:false,importIssues:['Periksa kategori setiap pernyataan dan kunci sesuai Word.']});context=[];
+   }
+   if(context.some(b=>b.text&&!/^[.\s…_]+$/.test(b.text)))warnings.push('Ada teks setelah tabel kategori terakhir; periksa naskah asli.');
+   continue;
+  }
+
   if(group.type==='MENJODOHKAN'){
    for(const table of group.blocks.filter(b=>b.table)){
     const left:string[]=[],right:string[]=[];
@@ -123,13 +180,14 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
   let shared:{from:number;to:number;blocks:Block[];id:string}|null=null,collectShared=false;
   const sharedMap=new Map<number,{blocks:Block[];id:string}>();
   const candidates=group.blocks.filter(autoNumber),freq=new Map<string,number>();for(const b of candidates)freq.set(b.listId,(freq.get(b.listId)||0)+1);
-  const mainList=[...freq].sort((a,b)=>b[1]-a[1])[0]?.[0];
+  const schoolCategories=sections.some(g=>g.type==='KATEGORI');const mainList=schoolCategories?candidates[0]?.listId:[...freq].sort((a,b)=>b[1]-a[1])[0]?.[0];const nestedLists=new Set<string>();
   let inAnswer=false;
   const flushShared=()=>{if(shared){for(let n=shared.from;n<=shared.to&&n<=500;n++)sharedMap.set(n,{blocks:[...shared.blocks],id:shared.id});}collectShared=false;};
   for(let bi=0;bi<group.blocks.length;bi++){
    const b=group.blocks[bi];
    const range=b.plain.match(/(?:no\.?|numbers?|questions?|nomor|soal)\s*(\d+)(?:\s*(?:and|[-–—]|to|sampai|dan)\s*(\d+))?/i);
-   const sharedCue=!autoNumber(b)&&(/^(?:(?:this|the)\s+(?:text|data)\s+for|text\s+(?:\d+|for)|read\b.*(?:text|passage|following|excerpt)|(?:direction:.*)?answer.*based on the text|bacalah\b|perhatikan\s+(?:teks|bacaan)|(?:teks|bacaan)\s+(?:berikut|untuk))/i.test(b.plain));
+   const sharedCue=!autoNumber(b)&&(/^(?:(?:this|the)\s+(?:text|data)\s+for|text\s+(?:\d+|for)|read\b.*(?:text|passage|following|excerpt|data|email)|observe the following|(?:direction:.*)?answer.*based on the text|bacalah\b|perhatikan\s+(?:teks|bacaan)|(?:teks|bacaan)\s+(?:berikut|untuk))/i.test(b.plain));
+   if(!chunk&&/^Berilah tanda silang/i.test(b.plain))continue;
    if(/^Direction:\s*For questions/i.test(b.plain))continue;
    if(sharedCue){
     if(range&&Number(range[1])!==chunks.length+1)warnings.push('Ada rujukan nomor bacaan yang berbeda dari urutan soal. Bacaan ditempatkan pada soal sesudahnya; periksa nomor rujukan di teks.');
@@ -138,19 +196,21 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
     if(/read\b.*[.!]\s+\S/i.test(b.plain))shared.blocks.push(b);
     continue;
    }
-   const manual=manualNumber(b),next=group.blocks.slice(bi+1,bi+9),hasOptions=(group.type==='PG'||group.type==='PG_KOMPLEKS')&&(chunk?.some(optionBlock)||chunk?.some(x=>[...x.text.matchAll(optionPattern)].length>=2));
-   const auto=autoNumber(b)&&((!inAnswer&&b.listId===mainList&&(!chunk||group.type==='URAIAN'||group.type==='ISIAN'||autoNumber(chunk[0])&&chunk[0].listId===b.listId))||!chunk||hasOptions||answerLabel.test(next[0]?.plain||''));
-   const numericStart=!!(manual&&Number(manual[1])>0&&(!chunk||hasOptions||group.type==='URAIAN'||group.type==='ISIAN'));
+   const manual=manualNumber(b),next=group.blocks.slice(bi+1,bi+9),hasOptions=(group.type==='PG'||group.type==='PG_KOMPLEKS')&&(chunk?.some(optionBlock)||chunk?.some(x=>[...x.text.matchAll(optionPattern)].length>=2||x.text.split('☐').length>=3));
+   const prior=chunk?.find(x=>manualNumber(x)||autoNumber(x));const priorNumber=prior?Number(manualNumber(prior)?.[1]||prior.number):0;
+   if(autoNumber(b)&&chunk&&b.listId!==prior?.listId&&b.number<=priorNumber)nestedLists.add(b.listId);
+   const auto=autoNumber(b)&&(schoolCategories?(!nestedLists.has(b.listId)||hasOptions)&&(!chunk||!inAnswer&&(b.listId===prior?.listId||b.number===priorNumber+1||hasOptions)):((!inAnswer&&b.listId===mainList&&(!chunk||group.type==='URAIAN'||group.type==='ISIAN'||autoNumber(chunk[0])&&chunk[0].listId===b.listId))||!chunk||hasOptions||answerLabel.test(next[0]?.plain||'')));
+   const numericStart=!!(manual&&Number(manual[1])>0&&(!chunk||hasOptions||(group.type==='URAIAN'||group.type==='ISIAN')&&(!schoolCategories||Number(manual[1])>priorNumber)||schoolCategories&&group.type==='PG_KOMPLEKS'&&Number(manual[1])===priorNumber+1));
    // Some manuscripts omit the number entirely. Recognize a fresh A–E list after a completed question.
    const following:Block[]=[];for(const item of group.blocks.slice(bi+1,bi+30)){if(autoNumber(item)||manualNumber(item)||section(item.plain))break;following.push(item);}
    const startsNewOptions=following.some(x=>['lowerLetter','upperLetter'].includes(x.fmt)&&x.number===1||/^\s*\*?[aA][.)]\s*/.test(x.plain));
-   const completeOptions=(chunk?.filter(optionBlock).length||0)>=4||chunk?.some(x=>[...x.text.matchAll(optionPattern)].length>=4);
+   const completeOptions=(chunk?.filter(b=>optionBlock(b)&&(!schoolCategories||b.fmt!=='bullet')).length||0)>=4||chunk?.some(x=>[...x.text.matchAll(optionPattern)].length>=4);
    const immediateOption=following.find(x=>x.text||['lowerLetter','upperLetter'].includes(x.fmt));
    const questionWithoutNumber=!!immediateOption&&(['lowerLetter','upperLetter'].includes(immediateOption.fmt)&&immediateOption.number===1||/^\s*\*?[aA][.)]\s*/.test(immediateOption.plain));
    const newCard=!!b.cardNumber&&!!chunk&&chunk.some(x=>x.cardNumber&&x.cardNumber!==b.cardNumber);
    const unnumbered=(group.type==='PG'||group.type==='PG_KOMPLEKS')&&(!!completeOptions||collectShared||!chunk||newCard)&&!autoNumber(b)&&!manual&&!optionBlock(b)&&b.plain.length>15&&startsNewOptions&&(!collectShared||questionWithoutNumber);
    if(unnumbered)b.inferred=true;
-   const begins=auto||numericStart||unnumbered;
+   const begins=group.blocks.some(x=>x.layoutStart)?!!b.layoutStart:auto||numericStart||unnumbered;
    if(begins&&(subject==='Bahasa Inggris'||group.type==='ISIAN')&&!chunks.length&&pending.length){shared={from:1,to:500,blocks:pending,id:crypto.randomUUID()};pending=[];collectShared=true;}
    if(begins){if(collectShared)flushShared();chunk=[...pending,b];pending=[];chunks.push(chunk);inAnswer=false;continue;}
    if(collectShared&&shared){shared.blocks.push(b);continue;}
@@ -172,16 +232,19 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
    if(blueprint){const position=blueprintUsed.get(blueprint.id)||0;blueprintUsed.set(blueprint.id,position+1);if(blueprint.numbers[position])q.sourceLabel=labels[group.type]+' '+blueprint.numbers[position];if(blueprint.points.length===blueprint.numbers.length&&blueprint.points[position]>0)q.points=blueprint.points[position];}
    if(source.some(b=>b.inferred))q.importIssues.push('Nomor soal tidak tertulis. Soal dipisahkan berdasarkan awal pilihan A; cocokkan nomor dengan Word.');
    const choiceIntro=source.findIndex((b,i)=>i>0&&/pilih(?:lah)?\s+(?:dua|tiga|[2-5])\s+(?:pernyataan|jawaban).*benar/i.test(b.plain));
+   const plainMCMA=group.type==='PG_KOMPLEKS'&&!source.some(optionBlock)&&sections.some(g=>g.type==='KATEGORI');const plainOptionBlocks=plainMCMA?source.filter(b=>b.text&&!/^[.\s…_]+$/.test(b.text)).slice(-4):[];
+   if(plainMCMA)q.importIssues.push('Opsi tanpa label dibaca dari empat paragraf terakhir. Cocokkan batas pertanyaan dan pilihan dengan Word.');
    const firstLetter=source.findIndex((b,i)=>i>0&&(['lowerLetter','upperLetter'].includes(b.fmt)||/^\s*\*?[a-f][.)]\s*/i.test(b.plain)));
    const rawOptions=new Map<number,string>(),markedOptions=new Set<number>(),explicitOptions=new Set<number>(),stem:string[]=[];let optionIndex=-1,seenFirst=false,answerMode=false;const answer:string[]=[];
    for(const b of source){let t=b.text;
-    if(b===first){seenFirst=true;if(manualNumber(b))t=t.replace(/^\s*(?:Soal\s+)?\d{1,3}(?:\s*[.),]\s*|\s+)/i,'');}
+    if(b===first){seenFirst=true;if(manualNumber(b))t=t.replace(/^\s*\.(?=\d)/,'').replace(/^\s*(?:Soal\s+)?\d{1,3}(?:\s*[.),]\s*|\s+)/i,'');}
     if(!seenFirst){stem.push(t);continue;}
-    if(answerLabel.test(b.plain)){answerMode=true;t=t.replace(answerLabel,'').trim();if(t)answer.push(t);continue;}
-    if(answerMode){answer.push(t);continue;}
+    if(answerLabel.test(b.plain)){answerMode=true;t=t.replace(answerLabel,'').trim();if(t&&!/^[.\s…_]+$/.test(t))answer.push(t);continue;}
+    if(answerMode){if(!/^[.\s…_]+$/.test(t))answer.push(t);continue;}
     if(/^[.\s…_]+$/.test(b.plain)&&!b.images.length)continue;
     if(group.type==='PG'||group.type==='PG_KOMPLEKS'){
-     if(choiceIntro>0&&source.indexOf(b)<=choiceIntro){stem.push(t);continue;}
+     if(t.includes('☐')&&(t.split('☐').length>2||t.split('☐')[0].trim())){const parts=t.split('☐');if(parts[0].trim())stem.push(parts[0].trim());for(const part of parts.slice(1)){optionIndex=rawOptions.size;rawOptions.set(optionIndex,part.trim());}q.type='PG_KOMPLEKS';continue;}
+     if(plainMCMA&&!plainOptionBlocks.includes(b)||choiceIntro>0&&source.indexOf(b)<=choiceIntro){stem.push(t);continue;}
      const automatic=['lowerLetter','upperLetter'].includes(b.fmt)&&b!==first;
      if(automatic)t=t.replace(/^\s*[A-F][.)]\s*/,'');if(automatic)t=String.fromCharCode(97+rawOptions.size)+'. '+t;
      let matches=[...t.matchAll(optionPattern)];if(matches.length===1&&t.slice(0,matches[0].index).trim()&&!(b===first&&matches[0][2].toLowerCase()==='a'&&source.some(x=>/^\s*\*?b[.)]\s+/i.test(x.plain))))matches=[];
@@ -262,6 +325,17 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
     else{const answerLines=texts[1]?.split('\n').map(clean).filter(Boolean)||[];const selected:number[]=[];let unmatched=false;for(const line of answerLines){const matches=q.options.map((o,i)=>({i,t:comparable(o)})).filter(o=>o.t===comparable(line));if(matches.length===1)selected.push(matches[0].i);else unmatched=true;}if(!unmatched&&selected.length)q.key=[...new Set(selected)].sort((a,b)=>a-b).join(',');else q.importIssues.push('Teks kunci checkbox tidak cocok persis dengan opsi. Tentukan pilihan benar manual.');}
    }else q.key=[texts[1],texts[2]&&texts[2]!=='-'?'Pedoman penilaian:\n'+texts[2]:''].filter(Boolean).join('\n\n');
   }
+ }
+ // Explicit numbered essay rubrics may start on the same line as the appendix heading.
+ if(keyMarker!=='none'&&keyStart<blocks.length){
+  let target:ImportedQuestion|undefined;const parts:string[]=[];
+  const flush=()=>{if(target&&parts.length){target.key=clean(parts.join('\n'));target.importIssues.push('Pedoman uraian dibaca dari lampiran bernomor. Periksa kecocokan dengan soal.');}parts.length=0;};
+  for(const b of blocks.slice(keyStart)){
+   const m=b.plain.match(/^Kunci\s*Jawaban\s*(?:soal\s*|:\s*)(\d+)[.)]?\s*(.*)$/i);
+   if(m){flush();target=bySection.get('URAIAN')?.[Number(m[1])-1];if(m[2])parts.push(m[2]);continue;}
+   if(/^Mengetahui/i.test(b.plain)){flush();target=undefined;break;}
+   if(target)parts.push(b.text);
+  }flush();
  }
  // Numbered essay answers outside tables (question is repeated, then Jawaban:).
  if(keyMarker!=='none'&&keyStart<blocks.length){

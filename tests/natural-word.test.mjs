@@ -76,3 +76,14 @@ console.log('PASS: grade XII checkbox boundaries/keys, hyphenated headings, atta
 
 const reference12=await importNaturalWord(await doc(p('Bahasa Inggris')+p('MULTIPLE CHOICE')+p('Text 1 for questions 1–1')+p('A complete source story.')+p('1. What happens?')+p('A. One')+p('B. Two')+p('COMPLEX MULTIPLE-CHOICE QUESTIONS')+p('26. Choose TWO events from the story.')+p('☐ One')+p('☐ Two')),async s=>s);
 assert.equal(reference12.questions.length,2);assert.equal(reference12.questions[1].stimulus,'A complete source story.');
+
+// SMP category matrices stay one question per table, with repeated categories allowed.
+const matrix='<w:tbl><w:tr>'+cell('Pernyataan')+cell('Benar')+cell('Salah')+'</w:tr><w:tr>'+cell('Pernyataan pertama')+cell('✓')+cell('')+'</w:tr><w:tr>'+cell('Pernyataan kedua')+cell('✓')+cell('')+'</w:tr></w:tbl>';
+const smp=await importNaturalWord(await doc(p('PILIHAN GANDA KATEGORI')+p('1. Perhatikan data berikut.')+matrix+p('URAIAN')+p('1. Jelaskan.')+p('Jawab:……………')+p('2. Berikan contoh.')+p('Jawab:.....')+p('Kunci Jawaban:1.Pedoman jawaban lengkap.')+p('Rincian penilaian.')),async s=>s);
+assert.equal(smp.questions.length,3);assert.equal(smp.questions[0].presentation,'KATEGORI');assert.equal(smp.questions[0].key,'0,0');assert.equal(smp.questions[0].left.length,2);assert.equal(sandbox.sanitize({...smp.questions[0],importReviewed:true}).key,'0,0');assert.match(smp.questions[1].key,/Pedoman jawaban lengkap/);assert.match(smp.questions[1].key,/Rincian penilaian/);assert.equal(smp.questions[2].key,'');
+const checkboxTable='<w:tbl><w:tr>'+cell('')+cell('Jawaban pertama')+'</w:tr><w:tr>'+cell('')+cell('Jawaban kedua')+'</w:tr></w:tbl>';
+const smpChoices=await importNaturalWord(await doc(p('PILIHAN GANDA KOMPLEKS')+p('1. Pilih jawaban sesuai.')+checkboxTable+p('PILIHAN GANDA KATEGORI')+matrix),async s=>s);assert.equal(smpChoices.questions.length,2);assert.deepEqual(Array.from(smpChoices.questions[0].options),['Jawaban pertama','Jawaban kedua']);
+const nestedEssay=await importNaturalWord(await doc(p('PILIHAN GANDA KATEGORI')+matrix+p('URAIAN')+p('1. Pertanyaan pertama.')+p('2. Pertanyaan kedua.')+p('1. Subpertanyaan satu.')+p('2. Subpertanyaan dua.')+p('3. Pertanyaan ketiga.')),async s=>s);assert.equal(nestedEssay.questions.length,4);assert.match(nestedEssay.questions[2].text,/Subpertanyaan dua/);
+console.log('PASS: SMP category matrices, repeated categories, checkbox tables, blank answer lines, numbered rubrics and nested essay prompts.');
+const instructionTable='<w:tbl><w:tr>'+cell('PETUNJUK UMUM')+'</w:tr><w:tr>'+cell('1. Sebelum mengerjakan bacalah Basmallah. 2. Periksalah naskah soal.')+'</w:tr></w:tbl>';
+const skipInstructions=await importNaturalWord(await doc(instructionTable+p('MULTIPLE CHOICE')+p('1. Actual exam question?')+p('A. First')+p('B. Second')),async s=>s);assert.equal(skipInstructions.questions.length,1);assert.match(skipInstructions.questions[0].text,/Actual exam/);
