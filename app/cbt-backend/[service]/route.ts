@@ -7,7 +7,9 @@ async function relay(req:Request,{params}:Context){
  const {service}=await params;
  if(!['auth','cbt','word-convert'].includes(service))return new Response(null,{status:404});
  if(req.method==='POST'&&!sameOrigin(req))return Response.json({error:'Asal permintaan tidak valid.'},{status:403});
+ // Run database-heavy requests beside the production database in Singapore.
  const headers=new Headers({'content-type':req.headers.get('content-type')||'application/json'});
+ headers.set('x-region','ap-southeast-1');
  const cookies=(req.headers.get('cookie')||'').split(';').map(x=>x.trim()).filter(x=>/^cbt_(session|auth_mode)=/.test(x)).join('; ');
  if(cookies)headers.set('cookie',cookies);
  try {
