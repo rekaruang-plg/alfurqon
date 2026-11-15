@@ -47,3 +47,6 @@
 .sort-header:focus-visible{outline:2px solid #167149;outline-offset:4px}
 
 .student-account-actions{display:flex;align-items:center;gap:.5rem;margin-left:auto}.incorrect-response{color:#a51d20;background:#fff2f2}.field input.manual-pending{background:#ffdfac;border-color:#b76b12}.field input.manual-filled{background:white}
+
+.rich-question:dir(rtl), .rich-text-field textarea:dir(rtl), .essay:dir(rtl){font-family:"Traditional Arabic","Noto Naskh Arabic",serif;text-align:right;}
+.rich-question:dir(rtl){display:block;}
