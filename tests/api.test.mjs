@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import ts from 'typescript';
 import {DatabaseSync} from 'node:sqlite';
 const sql=new DatabaseSync(':memory:');sql.exec(fs.readFileSync('database/schema.sql','utf8'));
-function statement(query,values=[]){return {bind(...args){return statement(query,args)},async first(){return sql.prepare(query).get(...values)||null},async all(){return {results:sql.prepare(query).all(...values)}},async run(){const r=sql.prepare(query).run(...values);return {meta:{changes:r.changes}}}}}
+let queryReads=[];
+function statement(query,values=[]){return {bind(...args){return statement(query,args)},async first(){return sql.prepare(query).get(...values)||null},async all(){queryReads.push({query,values});return {results:sql.prepare(query).all(...values)}},async run(){const r=sql.prepare(query).run(...values);return {meta:{changes:r.changes}}}}}
 const DB={prepare:statement,async batch(items){sql.exec('BEGIN');try{const r=[];for(const item of items)r.push(await item.run());sql.exec('COMMIT');return r}catch(e){sql.exec('ROLLBACK');throw e}}};
 let user={userId:'owner',email:'qa@example.test',displayName:'QA Admin',fullName:null};
 function evaluate(source,vars){const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;const box={exports:{},crypto,Response,Request,URL,TextEncoder,TextDecoder,Date,console,...vars};vm.runInNewContext(js,box);return box.exports}
@@ -111,6 +112,15 @@ user={email:'teacher@example.test',displayName:'Guru'};await call('grade',{id:at
 // Actual password login routes and cookie identity: only own history, no staff access.
 const login=await authRoutes.POST(new Request('https://cbt.test/api/auth',{method:'POST',headers:{origin:'https://cbt.test'},body:JSON.stringify({action:'login',username:card.username,password:card.password})}));assert.equal(login.status,200,JSON.stringify(await login.clone().json()));cookie=login.headers.get('set-cookie').split(';')[0];
 const portal=await state();assert.equal(portal.studentPortal,true);assert.equal(portal.student.id,pupil.id);assert.equal(portal.attempts.length,1);assert.equal(portal.attempts[0].score,90);assert(!portal.banks&&!portal.staffList&&!portal.loginAccounts);
+// Hundreds of schedules must not reload the whole student roster or question bank per exam.
+for(let i=0;i<404;i++)await writeRecord('scale-exam-'+i,'exam',{...reviewExams[0],id:'scale-exam-'+i,participantsSelected:true,studentIds:[pupil.id],excludedStudentIds:i%2?[pupil.id]:[]});
+queryReads=[];
+const scaledPortal=await state();
+assert.equal(scaledPortal.exams.filter(e=>e.id.startsWith('scale-exam-')).length,202);
+assert(queryReads.filter(r=>r.values[0]==='student').length<=2,'Roster reads must be bounded by academic periods, not schedule count');
+assert(!queryReads.some(r=>['bank','staff','audit','draft'].includes(r.values[0])),'Student dashboard must not fetch staff-only data');
+sql.prepare("DELETE FROM records WHERE id LIKE 'scale-exam-%'").run();
+console.log('PASS: student dashboard handles 404 schedules with bounded roster reads and correct exclusions.');
 assert.equal((await call('studentLaunch',{examId:reviewExams[0].id})).token,tk);await call('studentLaunch',{examId:exam.id},400);await call('saveSubject',{data:{name:'Forbidden',unit:'SD'}},400);await call('enter',{token},400);
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
 // Homeroom may download published results but must not grade another teacher's mapel.
