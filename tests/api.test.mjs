@@ -411,7 +411,7 @@ console.log('PASS: evaluation teacher assignment persistence/access scope, teach
 await loginCard(ownerCard);const period={year:'2026/2027',semester:1};
 await call('saveClass',{period,data:{name:'6 UNIQUE',unit:'SD',grade:'6'}});
 await call('importStudents',{period,rows:Array.from({length:30},(_,i)=>({Nama:'Unique '+i,NIS:'UNIQ'+i,Unit:'SD',Kelas:'6 UNIQUE',JK:'L'})),commit:true});
-const questions=Array.from({length:8},(_,i)=>({id:'unique-q'+i,type:'PG',text:'Question '+i,options:['A','B'],key:'0',points:10,mode:'TEKS',...(i<3?{stimulusId:'story',stimulus:'Shared story'}:{})}));
+const questions=Array.from({length:9},(_,i)=>({id:'unique-q'+i,type:'PG',text:'Question '+i,options:['A','B'],key:'0',points:10,mode:'TEKS',...(i<3?{stimulusId:'story',stimulus:'Shared story'}:{})}));
 await call('saveBank',{period,data:{title:'Unique order QA',unit:'SD',subject:'Matematika',questions}});
 const ub=(await state(period)).banks.find(b=>b.title==='Unique order QA');
 await call('saveExam',{period,data:{title:'Unique order QA',unit:'SD',className:'6 UNIQUE',grade:'6',subject:'Matematika',bankId:ub.id,duration:60,start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()}});
@@ -420,7 +420,7 @@ const first=await call('enter',{token:tokens[0].token});
 sql.prepare("UPDATE attempts SET data=json_remove(data,'$.questionOrder') WHERE id=?").run(first.id);
 const attempts=[first,...await Promise.all(tokens.slice(1).map(t=>call('enter',{token:t.token})))];
 assert.equal(new Set(attempts.map(a=>JSON.stringify(a.questions.map(q=>q.id)))).size,30);
-for(const a of attempts){assert.equal(a.questions.length,8);const i=a.questions.findIndex(q=>q.id==='unique-q0');assert.equal(a.questions[i+1].id,'unique-q1');assert.equal(a.questions[i+2].id,'unique-q2');assert(!a.questions.some(q=>'key' in q));}
+for(const a of attempts){assert.equal(a.questions.length,9);const i=a.questions.findIndex(q=>q.id==='unique-q0');assert.equal(a.questions[i+1].id,'unique-q1');assert.equal(a.questions[i+2].id,'unique-q2');assert(!a.questions.some(q=>'key' in q));}
 await call('answer',{token:tokens[1].token,questionId:'unique-q4',value:'0'});
 const resumed=await call('enter',{token:tokens[1].token});assert.deepEqual(resumed.questions,attempts[1].questions);assert.equal(resumed.answers['unique-q4'],'0');
 const legacy=await call('enter',{token:tokens[0].token});assert.deepEqual(legacy.questions,first.questions);

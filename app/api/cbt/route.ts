@@ -130,9 +130,17 @@ async function attemptByToken(token:string){if(typeof token!=='string'||token.le
 async function saveAttempt(a:any){const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;const r=await db().prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=? AND version=?').bind(JSON.stringify(rest),a.id,version).run();if(!r.meta.changes)fail('Jawaban sedang diperbarui. Coba kembali.');a.version++}
 async function startWithUniqueOrder(a:any,questions:Question[]){
  for(let retry=0;retry<40;retry++){
-  const rows=(await db().prepare("SELECT id, json_extract(data,'$.questionOrder') AS ordering, CASE WHEN json_extract(data,'$.questionOrder') IS NULL THEN json_extract(data,'$.questions') END AS questions FROM attempts WHERE exam_id=? AND id<>? AND json_array_length(data,'$.questions')>0").bind(a.examId,a.id).all()).results as any[];
-  const used=rows.map(row=>row.ordering||JSON.stringify(JSON.parse(row.questions).map((q:any)=>q.id)));
-  const choice=uniqueQuestionOrder(questions,used);a.questions=choice.questions;a.questionOrder=choice.signature;a.orderSpaceExhausted=!choice.unique;
+  let choice=uniqueQuestionOrder(questions,[]);
+  // Try a random order first. Read the full order history only after collisions,
+  // so short packages still reuse orders only when every permutation is taken.
+  if(choice.groupCount<7||retry>=2){
+   const rows=(await db().prepare("SELECT id, json_extract(data,'$.questionOrder') AS ordering, CASE WHEN json_extract(data,'$.questionOrder') IS NULL THEN json_extract(data,'$.questions') END AS questions FROM attempts WHERE exam_id=? AND id<>? AND json_array_length(data,'$.questions')>0").bind(a.examId,a.id).all()).results as any[];
+   const used=rows.map(row=>row.ordering||JSON.stringify(JSON.parse(row.questions).map((q:any)=>q.id)));
+   choice=uniqueQuestionOrder(questions,used);
+  }
+  a.questions=choice.questions;
+  a.questionOrder=choice.signature;
+  a.orderSpaceExhausted=!choice.unique;
   const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;
   // A single database statement arbitrates simultaneous starts, including legacy attempts.
   const guard=choice.unique?" AND NOT EXISTS (SELECT 1 FROM attempts AS other WHERE other.exam_id=? AND other.id<>? AND (json_extract(other.data,'$.questionOrder')=? OR (json_extract(other.data,'$.questionOrder') IS NULL AND (SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(other.data,'$.questions'))=?)))":"";
