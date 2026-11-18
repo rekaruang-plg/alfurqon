@@ -12,7 +12,7 @@ export const dynamic='force-dynamic';
 async function handlers(req:Request){
 let requestBody:any=null; if(req.method==='POST')requestBody=await req.clone().json();
 let identity:any=null;try{identity=await actor(req)}catch{}
-const studentAction=['preview','enter','answer','submit','exitExam','securityLock','requestUnlock','heartbeat','tokenDashboard'].includes(requestBody?.action);
+const studentAction=['preview','enter','answer','saveAnswers','submit','exitExam','securityLock','requestUnlock','heartbeat','tokenDashboard'].includes(requestBody?.action);
 const demo=identity?.staff ? !!identity.staff.demo : studentAction?String(requestBody.token||'').startsWith('DEMO-'):false;
 const db=()=>{if(!env.DB)throw new Error('Database belum tersedia');return demo?{prepare:(q:string)=>env.DB!.prepare(q.replace(/\brecords\b/g,'demo_records').replace(/\battempts\b/g,'demo_attempts')),batch:(q:any[])=>env.DB!.batch(q)}:env.DB};
 const id=()=>crypto.randomUUID();
@@ -130,7 +130,7 @@ async function attemptByToken(token:string){if(typeof token!=='string'||token.le
 async function saveAttempt(a:any){const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;const r=await db().prepare('UPDATE attempts SET data=?,version=version+1 WHERE id=? AND version=?').bind(JSON.stringify(rest),a.id,version).run();if(!r.meta.changes)fail('Jawaban sedang diperbarui. Coba kembali.');a.version++}
 async function startWithUniqueOrder(a:any,questions:Question[]){
  for(let retry=0;retry<40;retry++){
-  const rows=(await db().prepare("SELECT id, json_extract(data,'$.questionOrder') AS ordering, json_extract(data,'$.questions') AS questions FROM attempts WHERE exam_id=? AND id<>? AND json_array_length(data,'$.questions')>0").bind(a.examId,a.id).all()).results as any[];
+  const rows=(await db().prepare("SELECT id, json_extract(data,'$.questionOrder') AS ordering, CASE WHEN json_extract(data,'$.questionOrder') IS NULL THEN json_extract(data,'$.questions') END AS questions FROM attempts WHERE exam_id=? AND id<>? AND json_array_length(data,'$.questions')>0").bind(a.examId,a.id).all()).results as any[];
   const used=rows.map(row=>row.ordering||JSON.stringify(JSON.parse(row.questions).map((q:any)=>q.id)));
   const choice=uniqueQuestionOrder(questions,used);a.questions=choice.questions;a.questionOrder=choice.signature;a.orderSpaceExhausted=!choice.unique;
   const {data,tokenHash,token_hash,student_id,exam_id,version,...rest}=a;
@@ -206,7 +206,7 @@ async function GET(req:Request){try{
  return Response.json({demo,period,classes:visibleClasses.filter((c:any)=>c.year===period.year),topics:topics.filter(scope).filter(inPeriod),years:await all('year'),activeYear,authMethod,loginAccounts:staff.role==='Super Admin'&&!demo?(await authRecords('credential')).map((c:any)=>({staffId:c.staffId,username:c.username})):[],catalogReady:!!(await get('catalog-v2')),subjects:subjects.filter(scope),user,staff,students:students.filter((s:any)=>(s.year||'2026/2027')===period.year).filter(scope).filter((x:any)=>staff.role!=='Guru'||visibleClasses.some((c:any)=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),exams:examsVisible.map((e:any)=>({...e,tokenExpiresAt:(()=>{const t=sharedRows.find((v:any)=>v.id==='shared-'+e.id);return t?(t.issuedSlot===undefined?Math.floor(Date.now()/900000)+1:t.issuedSlot+1)*900000:0})(),questionSources:(snapshotRows.find((x:any)=>x.id==='snapshot-'+e.id)?.questions||banks.find((b:any)=>b.id===e.bankId)?.questions||[]).map((q:any)=>q.sourceId||q.id),canMonitor:examPermission(staff,e,'monitor'),canManageAttempt:examPermission(staff,e,'monitor'),canProctor:examPermission(staff,e,'token'),canGrade:examPermission(staff,e,'grade'),canWrite:examPermission(staff,e,'bank')})),banks:banks.filter(scope).map((b:any)=>({...b,canPreviewPackage:staff.role!=='Guru'||teaches(staff,b)||homeroomCanWrite(staff,b)||examsVisible.some((e:any)=>e.unit===b.unit&&e.subject===b.subject&&(!e.grade||!b.grade||e.grade===b.grade)&&(examPermission(staff,e,'bank')||examPermission(staff,e,'grade')))})),drafts:(await all('draft')).filter((d:any)=>d.ownerId===staff.id&&inPeriod(d)),staffList:people.filter((x:any)=>x.role!=='Guru'||belongsYear(x)).filter(scope).filter((p:any)=>staff.role==='Super Admin'||p.role==='Guru').map((p:any)=>staff.role==='Guru'?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),attempts:safeAttempts,audit:staff.role==='Guru'?[]:logs.filter(scope).slice(-50).reverse()},{headers:{'Cache-Control':'no-store'}});
  }catch(e:any){return Response.json({error:e.message},{status:401})}}
 async function POST(req:Request){try{const origin=req.headers.get('origin');if(origin&&!sameOrigin(req))fail('Asal permintaan tidak valid.');const b:any=await req.json();if(identity?.staff&&b.activeYearAtOpen&&b.activeYearAtOpen!==activeYear)fail('Tahun pelajaran aktif telah berubah. Tutup editor lalu perbarui dashboard.');if(JSON.stringify(b).length>1_500_000)fail('Data terlalu besar.');
-if(['preview','enter','answer','submit','exitExam','securityLock','requestUnlock','heartbeat','tokenDashboard'].includes(b.action)){
+if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock','requestUnlock','heartbeat','tokenDashboard'].includes(b.action)){
  const a=await attemptByToken(b.token);const exam=await get(a.examId),student=await studentFor(a.studentId,exam||{});if(identity?.staff?.role==='Siswa'&&(identity.staff.studentId!==a.studentId||!!identity.staff.demo!==demo))fail('Token bukan milik akun siswa ini.');if(!exam||exam.deletedAt||!student||student.deletedAt)fail('Jadwal atau siswa tidak ditemukan.');if(a.requiresLogin&&(!identity?.staff||identity.staff.role!=='Siswa'||identity.staff.studentId!==a.studentId))fail('Masuk dengan akun siswa terlebih dahulu.');
  await settleAttempt(a);
  if(b.action==='preview'){if(a.status==='Belum mulai'&&(exam.status!=='Aktif'||Date.now()<Date.parse(exam.start)||Date.now()>=Date.parse(exam.end)))fail('Ujian belum dibuka atau jadwal sudah berakhir.');return Response.json({id:a.id,student:{name:student.name,nis:student.nis,unit:student.unit,className:student.className},exam:{title:exam.title,subject:exam.subject,duration:exam.duration,start:exam.start,end:exam.end,browserGuard:!exam.simulation,instructions:exam.instructions||'Kerjakan secara mandiri. Hubungi pengawas bila ada kendala.'},status:a.status},{headers:{'Cache-Control':'no-store'}});}
@@ -238,8 +238,21 @@ if(['preview','enter','answer','submit','exitExam','securityLock','requestUnlock
  if(a.status==='Mengerjakan'){
  const disconnected=a.strictExit&&Date.now()-(a.lastSeenAt||a.startedAt)>120000;const expired=Date.now()>=a.deadline||disconnected;
  if(b.action==='securityLock'&&!expired&&a.browserGuard){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}if((a.resetCount||0)>=1){a.status='Dikumpulkan';a.submittedAt=Date.now();a.exitReason='Pelanggaran kedua setelah reset token';a.grades=mark(a.questions,a.answers);a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Jawaban otomatis dikumpulkan',reason:a.exitReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}a.securityLocked=true;a.securityReason=b.reason==='fullscreen'?'Keluar dari layar penuh':'Berpindah tab / halaman tidak terlihat';a.pausedAt=Date.now();a.remainingMs=Math.max(0,a.deadline-Date.now());a.remainingSubmitMs=Math.max(0,(a.submitAfter||0)-Date.now());a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Kunci halaman ujian',reason:a.securityReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}
- if(b.action==='answer'&&!expired){if(!a.questions.some((q:any)=>q.id===b.questionId)||typeof b.value!=='string'||b.value.length>20000)fail('Jawaban tidak valid.');a.answers[b.questionId]=b.value;a.flags=Array.isArray(b.flags)?b.flags.filter((v:string)=>a.questions.some((q:any)=>q.id===v)):a.flags;a.lastSavedAt=Date.now();a.lastSeenAt=Date.now();await saveAttempt(a)}
- if(b.action==='heartbeat'&&!expired){a.lastSeenAt=Date.now();await saveAttempt(a);}
+ if((b.action==='answer'||b.action==='saveAnswers')&&!expired){
+   const entries=b.action==='answer'?[[b.questionId,b.value]]:Object.entries(b.answers||{});
+   const questionIds=new Set(a.questions.map((q:Question)=>q.id));
+   if(!entries.length||entries.length>questionIds.size||entries.some(([key,value])=>!questionIds.has(key)||typeof value!=='string'||value.length>20000))fail('Jawaban tidak valid.');
+   for(const [key,value] of entries)a.answers[key]=value;
+   if(Array.isArray(b.flags))a.flags=b.flags.filter((key:string)=>questionIds.has(key));
+   a.lastSavedAt=a.lastSeenAt=Date.now();
+   await saveAttempt(a);
+   if(b.action==='saveAnswers')return Response.json({compact:true,id:a.id,status:a.status,lastSavedAt:a.lastSavedAt,serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
+ }
+ if(b.action==='heartbeat'&&!expired){
+   // A recent answer save already counts as activity.
+   if(Date.now()-a.lastSeenAt>=20000){a.lastSeenAt=Date.now();await saveAttempt(a);}
+   if(b.compact)return Response.json({compact:true,id:a.id,status:a.status,serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
+ }
  if(b.action==='submit'&&!expired){const issue=submissionIssue(a);if(issue)fail(issue);}
  if(b.action==='exitExam'&&!expired){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}a.exitReason='Keluar dari halaman ujian';}
  if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired&&!disconnected;if(disconnected)a.exitReason='Sesi tidak terhubung lebih dari 2 menit';a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}

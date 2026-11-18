@@ -647,3 +647,43 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  await call('saveClass',{activeYearAtOpen:'1900/1901',data:{name:'STALE',unit:'SD',grade:'6'}},400);
  console.log('PASS: REV.8 multi-statement True/False, changed key, frozen publication, reopening, decimal marking and active-year guard.');
 }
+
+// Exercise concurrent answer saves and idempotent submission against isolated fixtures.
+{
+ const session='11111111-1111-4111-a111-111111111111';
+ async function digest(value){
+   return Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))).toString('hex');
+ }
+ const sessionHash=await digest(session);
+ const examId='scale-check-exam';
+ const now=Date.now();
+ const questions=[{...pgk,id:'batch-a'},{...pgk,id:'batch-b'}];
+ await writeRecord(examId,'exam',{id:examId,title:'Scale check',status:'Aktif',start:new Date(now-60000).toISOString(),end:new Date(now+600000).toISOString(),duration:10});
+ const insert=sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)');
+ const students=Array.from({length:1000},(_,i)=>({id:'scale-check-'+i,token:'SCALE-CHECK-'+i}));
+ await Promise.all(students.map(async ({id,token})=>{
+   const studentId=id+'-student';
+   await writeRecord(studentId,'student',{id:studentId,name:id});
+   insert.run(id,studentId,examId,await digest(token),JSON.stringify({id,studentId,examId,sessionHash,questions,status:'Mengerjakan',answers:{},deadline:now+600000,submitAfter:now-1000,lastSeenAt:now}));
+ }));
+ cookie='';
+ const answers={'batch-a':'0','batch-b':'1'};
+ await call('saveAnswers',{token:students[0].token,answers:{...answers,unknown:'x'}},400);
+ assert.deepEqual(JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(students[0].id).data).answers,{});
+ await Promise.all(students.map(async ({token})=>{
+   const ack=await call('saveAnswers',{token,answers});
+   assert(ack.compact&&ack.lastSavedAt&&!ack.questions);
+ }));
+ const submitAll=()=>Promise.all(students.map(({token})=>call('submit',{token})));
+ const initial=await submitAll(), retried=await submitAll();
+ assert.deepEqual(retried.map(a=>a.id),initial.map(a=>a.id));
+ const stored=sql.prepare('SELECT data,version FROM attempts WHERE exam_id=?').all(examId);
+ assert.equal(stored.length,1000);
+ for(const row of stored){
+   const data=JSON.parse(row.data);
+   assert.equal(data.status,'Dikumpulkan');
+   assert.deepEqual(data.answers,answers);
+   assert.equal(row.version,2);
+ }
+ console.log('PASS: 1,000 synthetic attempts retained every answer; retrying submit produced no additional writes.');
+}
