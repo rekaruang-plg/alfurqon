@@ -5,3 +5,9 @@ export const symbolSets:Record<string,string[]>={
  KIMIA:'₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉ ⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ⁺ ⁻ + − = → ← ⇌ ⇋ ↔ ↑ ↓ Δ ° °C · × ⇝ α β γ λ μ mol pH (s) (l) (g) (aq)'.split(' '),
  ARAB:'ا ب ت ث ج ح خ د ذ ر ز س ش ص ض ط ظ ع غ ف ق ك ل م ن ه و ي ء أ إ آ ة ى َ ُ ِ ْ ّ ً ٌ ٍ ٠ ١ ٢ ٣ ٤ ٥ ٦ ٧ ٨ ٩'.split(' ')
 };
+
+export function defaultQuestionPoints(type: string): number {
+  if (type === 'PG') return 1;
+  if (type === 'PG_KOMPLEKS') return 2;
+  return 10;
+}

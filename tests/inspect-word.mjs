@@ -9,7 +9,7 @@ const require=createRequire(import.meta.url);
 const domPackage=fs.readdirSync('node_modules/.pnpm').find(n=>n.startsWith('@xmldom+xmldom@'));
 const {DOMParser,XMLSerializer}=require(`${process.cwd()}/node_modules/.pnpm/${domPackage}/node_modules/@xmldom/xmldom`);
 function load(file,deps={}){const box={exports:{},require:n=>n==='jszip'?JSZip:deps[n],DOMParser,XMLSerializer,crypto:webcrypto};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,box);return box.exports;}
-const word=load('lib/word-import.ts');const {importNaturalWord}=load('lib/natural-word-import.ts',{'./word-import':word});
+const word=load('lib/word-import.ts');const {importNaturalWord}=load('lib/natural-word-import.ts',{'./word-import':word,'./question-settings':load('lib/question-settings.ts')});
 const files=process.argv.slice(2);
 if(!files.length)throw Error('Usage: node tests/inspect-word.mjs file1.docx [file2.docx ...]');
 const route=fs.readFileSync('app/api/cbt/route.ts','utf8'),start=route.indexOf('function sanitizeQ('),end=route.indexOf('\n',start);

@@ -9,7 +9,7 @@ const require=createRequire(import.meta.url);
 const domPackage=fs.readdirSync('node_modules/.pnpm').find(n=>n.startsWith('@xmldom+xmldom@'));
 const {DOMParser,XMLSerializer}=require(`${process.cwd()}/node_modules/.pnpm/${domPackage}/node_modules/@xmldom/xmldom`);
 function load(file,deps={}){const box={exports:{},require:n=>n==='jszip'?JSZip:deps[n],DOMParser,XMLSerializer,crypto:webcrypto};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,box);return box.exports;}
-const word=load('lib/word-import.ts');const {importNaturalWord}=load('lib/natural-word-import.ts',{'./word-import':word});
+const word=load('lib/word-import.ts');const {importNaturalWord}=load('lib/natural-word-import.ts',{'./word-import':word,'./question-settings':load('lib/question-settings.ts')});
 const p=t=>`<w:p><w:r><w:t>${t}</w:t></w:r></w:p>`;
 const cell=(t,fill='')=>`<w:tc>${fill?`<w:tcPr><w:shd w:fill="${fill}"/></w:tcPr>`:''}${p(t)}</w:tc>`;
 async function doc(body){const z=new JSZip();z.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body>${body}</w:body></w:document>`);return z.generateAsync({type:'arraybuffer'});}

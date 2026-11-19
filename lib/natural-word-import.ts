@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import {prepareWord,shrinkImage} from './word-import';
+import {defaultQuestionPoints} from './question-settings';
 import type {Question} from './model';
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main',R='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 const elements=(e:Node)=>Array.from(e.childNodes).filter(n=>n.nodeType===1) as Element[];
@@ -230,7 +231,7 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
   if(pending.length&&chunk)chunk.push(...pending);
   if(!chunks.length){if(group.blocks.length)warnings.push('Bagian '+labels[group.type]+' tidak memiliki nomor soal yang dikenali. Periksa kelengkapan dokumen.');continue;}
   for(let index=0;index<chunks.length;index++){
-   const source=chunks[index],first=source.find(b=>autoNumber(b)||manualNumber(b))||source.find(b=>b.plain)||source[0];const q:ImportedQuestion={id:Array.from(crypto.getRandomValues(new Uint8Array(18)),n=>n.toString(16).padStart(2,'0')).join(''),type:group.type,text:'',options:[],key:'',points:10,mode,images:[],scope:'',keywords:'',left:[],right:[],sourceLabel:labels[group.type]+' '+(first.cardNumber||manualNumber(first)?.[1]||(autoNumber(first)?first.number:index+1)),importIssues:[],importReviewed:false,importSource:source.map(b=>b.text).join('\n')};
+   const source=chunks[index],first=source.find(b=>autoNumber(b)||manualNumber(b))||source.find(b=>b.plain)||source[0];const q:ImportedQuestion={id:Array.from(crypto.getRandomValues(new Uint8Array(18)),n=>n.toString(16).padStart(2,'0')).join(''),type:group.type,text:'',options:[],key:'',points:defaultQuestionPoints(group.type),mode,images:[],scope:'',keywords:'',left:[],right:[],sourceLabel:labels[group.type]+' '+(first.cardNumber||manualNumber(first)?.[1]||(autoNumber(first)?first.number:index+1)),importIssues:[],importReviewed:false,importSource:source.map(b=>b.text).join('\n')};
    const blueprint=source.find(b=>b.blueprint)?.blueprint;
    if(blueprint){const position=blueprintUsed.get(blueprint.id)||0;blueprintUsed.set(blueprint.id,position+1);if(blueprint.numbers[position])q.sourceLabel=labels[group.type]+' '+blueprint.numbers[position];if(blueprint.points.length===blueprint.numbers.length&&blueprint.points[position]>0)q.points=blueprint.points[position];}
    if(source.some(b=>b.inferred))q.importIssues.push('Nomor soal tidak tertulis. Soal dipisahkan berdasarkan awal pilihan A; cocokkan nomor dengan Word.');
@@ -318,13 +319,13 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
   }
  }
  // Read answer tables only after the explicit answer-key heading. Never append them to stems.
- let keyType:Kind|undefined=section(blocks[keyStart]?.plain.replace(/^KUNCI\s*JAWABAN\s*/i,'' )||''),points=10,lastNumber=0,inferredEssay=false;const keySeen=new Set<string>();
+ let keyType:Kind|undefined=section(blocks[keyStart]?.plain.replace(/^KUNCI\s*JAWABAN\s*/i,'' )||''),points:number|undefined,lastNumber=0,inferredEssay=false;const keySeen=new Set<string>();
  for(const block of keyMarker==='none'?[]:blocks.slice(keyStart+1)){
-  const type=section(block.plain);if(type){keyType=type;lastNumber=0;points=Number(block.plain.match(/(?:soal|bobot)\s*(\d+(?:[.,]\d+)?)\s*(?:point|poin)/i)?.[1]||10);}
+  const type=section(block.plain);if(type){keyType=type;lastNumber=0;const weight=block.plain.match(/(?:soal|bobot)\s*(\d+(?:[.,]\d+)?)\s*(?:point|poin)/i)?.[1];points=weight?Number(weight.replace(',','.')):undefined;}
   if(!block.table)continue;
-  for(const row of elements(block.node).filter(e=>e.localName==='tr')){const cells=elements(row).filter(e=>e.localName==='tc');const texts=await Promise.all(cells.map(c=>read(c).then(clean)));const rowType=section(texts.join(' '));if(rowType){keyType=rowType;lastNumber=0;continue;}const number=Number(texts[0]?.match(/^\s*(\d+)\s*\.?\s*$/)?.[1]);if(!number||!keyType)continue;
-   let inferred=false;if(keyType==='ISIAN'&&number===1&&lastNumber>1&&bySection.has('URAIAN')){keyType='URAIAN';inferred=true;inferredEssay=true;}lastNumber=number;
-   const q=bySection.get(keyType)?.[number-1];if(!q){warnings.push('Kunci '+labels[keyType]+' '+number+' tidak memiliki soal yang sesuai.');continue;}if(keySeen.has(keyType+number)){q.importIssues.push('Kunci ganda ditemukan; pilih kunci yang benar secara manual.');q.key='';continue;}keySeen.add(keyType+number);q.points=points;
+  for(const row of elements(block.node).filter(e=>e.localName==='tr')){const cells=elements(row).filter(e=>e.localName==='tc');const texts=await Promise.all(cells.map(c=>read(c).then(clean)));const rowType=section(texts.join(' '));if(rowType){if(rowType!==keyType)points=undefined;keyType=rowType;lastNumber=0;continue;}const number=Number(texts[0]?.match(/^\s*(\d+)\s*\.?\s*$/)?.[1]);if(!number||!keyType)continue;
+   let inferred=false;if(keyType==='ISIAN'&&number===1&&lastNumber>1&&bySection.has('URAIAN')){keyType='URAIAN';points=undefined;inferred=true;inferredEssay=true;}lastNumber=number;
+   const q=bySection.get(keyType)?.[number-1];if(!q){warnings.push('Kunci '+labels[keyType]+' '+number+' tidak memiliki soal yang sesuai.');continue;}if(keySeen.has(keyType+number)){q.importIssues.push('Kunci ganda ditemukan; pilih kunci yang benar secara manual.');q.key='';continue;}keySeen.add(keyType+number);if(points!==undefined&&points>0)q.points=points;
    if(inferred||inferredEssay&&keyType==='URAIAN')q.importIssues.push('Judul bagian kunci uraian tidak tertulis. Periksa pasangan kunci ini.');
    if(keyType==='PG'){
     const marked=cells.slice(1).map((c,i)=>({i,marked:descendants(c,'shd').some(x=>(/^[0-9A-F]{6}$/i.test(value(x,'fill'))&&(!/^([0-9A-F]{2})\1\1$/i.test(value(x,'fill'))||value(x,'fill')==='000000')))||descendants(c,'highlight').some(x=>['yellow','green'].includes(value(x)))})).filter(x=>x.marked);
