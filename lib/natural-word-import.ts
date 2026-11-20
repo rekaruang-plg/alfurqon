@@ -277,7 +277,7 @@ export async function importNaturalWord(buffer:ArrayBuffer,convertImage:(src:str
     if(cue>0){const statements=source.slice(1,cue).filter(b=>b.fmt==='decimal'&&b.listId!==first.listId);if(statements.length>=2){q.options=statements.map(b=>b.text);stem.push(source[cue].text);q.importIssues.push('Pilihan nomor dipasangkan dengan pernyataan bernomor. Periksa penomoran dan kuncinya.');}}
    }
    q.text=clean(stem.join('\n'));if(group.type==='PG_KOMPLEKS'&&group.blocks.some(b=>/pilih satu kombinasi/i.test(b.plain)))q.type='PG';
-   if(/pilih\s+(?:[2-5]|dua|tiga|empat|semua)|select\s+(?:all|two|three)|lebih\s+dari\s+(?:satu|1)|pilih\s+jawaban\s+lebih/i.test(q.text))q.type='PG_KOMPLEKS';
+   if(group.type!=='URAIAN'&&/pilih\s+(?:[2-5]|dua|tiga|empat|semua)|select\s+(?:all|two|three)|lebih\s+dari\s+(?:satu|1)|pilih\s+jawaban\s+lebih/i.test(q.text))q.type='PG_KOMPLEKS';
    const inlineKey=q.text.match(/\(\s*(?:JAWABAN|KUNCI)\s*:?\s*([A-F](?:\s*[, dan]+\s*[A-F])*)\s*\)/i);
    if(inlineKey&&!q.options.length&&source.some(b=>b.images.length)){q.options=['A','B','C','D','E'].map(l=>'Pilihan '+l+' pada gambar');q.importIssues=q.importIssues.filter(s=>!s.startsWith('Pilihan belum'));q.importIssues.push('Pilihan berada dalam gambar gabungan. Cocokkan tombol A–E dengan label pada gambar.');}if(inlineKey){q.text=q.text.replace(inlineKey[0],'').trim();if(keyMarker!=='none')for(const l of inlineKey[1].toUpperCase().match(/[A-F]/g)||[])explicitOptions.add(l.charCodeAt(0)-65);}
    if(keyMarker!=='none'&&answer.length)q.key=clean(answer.join('\n'));

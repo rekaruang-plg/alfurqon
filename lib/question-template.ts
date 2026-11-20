@@ -32,5 +32,5 @@ export function questionFromFields(raw:Record<string,string>,id:string,images:st
  if(['PG','PG_KOMPLEKS'].includes(type)&&(options.length<2||!key))throw Error('Isi minimal dua opsi dan kunci jawaban.');
  if(type==='MENJODOHKAN'&&(!left.length||!right.length))throw Error('Isi butir kiri, kanan dan kunci pasangan.');
  const points=Number(m.POIN_MAKS?.trim() || defaultQuestionPoints(type));if(!Number.isFinite(points)||points<=0)throw Error('Poin maksimum harus lebih dari 0.');
- return {id,type,images,scope:m.LINGKUP_MATERI||'',keywords:m.KATA_KUNCI||'',text:m.PERTANYAAN,points,options,key,mode:(m.MODE_JAWABAN||'TEKS').toUpperCase(),left,right};
+ return {id,type,images,scope:m.LINGKUP_MATERI||'',keywords:m.KATA_KUNCI||'',text:m.PERTANYAAN,points,options:type==='URAIAN'?[]:options,key,mode:(m.MODE_JAWABAN||'TEKS').toUpperCase(),left,right};
 }
