@@ -117,7 +117,7 @@ for(let i=0;i<404;i++)await writeRecord('scale-exam-'+i,'exam',{...reviewExams[0
 queryReads=[];
 const scaledPortal=await state();
 assert.equal(scaledPortal.exams.filter(e=>e.id.startsWith('scale-exam-')).length,202);
-assert(queryReads.filter(r=>r.values[0]==='student').length<=2,'Roster reads must be bounded by academic periods, not schedule count');
+assert(!queryReads.some(r=>['student','student_year','academic_profile'].includes(r.values[0])),'Student dashboard must fetch individual profiles by ID, never full rosters');
 assert(!queryReads.some(r=>['bank','staff','audit','draft'].includes(r.values[0])),'Student dashboard must not fetch staff-only data');
 sql.prepare("DELETE FROM records WHERE id LIKE 'scale-exam-%'").run();
 console.log('PASS: student dashboard handles 404 schedules with bounded roster reads and correct exclusions.');
