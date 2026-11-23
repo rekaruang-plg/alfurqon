@@ -214,9 +214,46 @@ async function studentOverview(studentId:string){
 
  return Response.json({student,studentPortal:true,demo,exams:schedules,attempts:mine.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
 }
+async function monitoringProgress(staff:any,examId:string){
+ const exam=await get(examId);
+ if(!exam||exam._kind!=='exam'||exam.deletedAt||!inPeriod(exam)||!examPermission(staff,exam,'monitor')){
+   return Response.json({error:'Jadwal tidak tersedia untuk monitoring.'},{status:403});
+ }
+ const {results}=await db().prepare(
+   "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder') AS summary,json_array_length(data,'$.questions') AS question_count FROM attempts WHERE exam_id=?"
+ ).bind(exam.id).all();
+ const now=Date.now();
+ const attempts=results.map((row:any)=>{
+   const attempt=JSON.parse(row.summary);
+   let {status,pausedAt,timedOut,submittedAt,securityLocked,exitReason}=attempt;
+   let deadline=Number(attempt.deadline);
+   let lastSeenAt=attempt.lastSeenAt||attempt.startedAt;
+   // Mirror the displayed expiry without grading or writing from a polling request.
+   if(status==='Mengerjakan'&&attempt.pauseUntil&&now>=attempt.pauseUntil){
+     deadline+=attempt.pauseUntil-pausedAt;
+     lastSeenAt=attempt.pauseUntil;
+     pausedAt=undefined;
+   }
+   const disconnected=!pausedAt&&attempt.strictExit&&now-lastSeenAt>120000;
+   if(status==='Mengerjakan'&&(!pausedAt||securityLocked)&&(now>=deadline||disconnected)){
+     status='Dikumpulkan';
+     timedOut=now>=deadline;
+     submittedAt=timedOut?deadline:now;
+     pausedAt=undefined;
+     securityLocked=false;
+     exitReason=timedOut?'Waktu ujian berakhir':'Sesi tidak terhubung lebih dari 2 menit';
+   }
+   return {id:row.id,examId:row.exam_id,studentId:row.student_id,status,timedOut,submittedAt,
+     pausedAt,securityLocked,exitReason,resetCount:attempt.resetCount||0,actionNotes:attempt.actionNotes,
+     answeredCount:Object.values(attempt.answers||{}).filter(Boolean).length,questionCount:Number(row.question_count)||0};
+ });
+ return Response.json({examId,attempts},{headers:{'Cache-Control':'no-store'}});
+}
+
 async function GET(req:Request){try{
  if(req.method==='GET'&&query.get('activePeriod')==='1'&&identity?.staff)return Response.json({activeYear},{headers:{'Cache-Control':'no-store'}});
- const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(staff.role==='Siswa')return await studentOverview(staff.studentId);await ensureMasters();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SD')await ensureSdSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMP')await ensureSmpSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMA')await ensureSmaSubjects();
+ const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'');
+ if(staff.role==='Siswa')return await studentOverview(staff.studentId);await ensureMasters();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SD')await ensureSdSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMP')await ensureSmpSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMA')await ensureSmaSubjects();
  const [students,exams,people,logs,classes,subjects,topics,bankRows]=await Promise.all([
    ...['student','exam','staff','audit','class','subject','topic'].map(all),
    db().prepare('SELECT * FROM records WHERE kind=?').bind('bank').all().then(result=>

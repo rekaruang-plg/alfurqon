@@ -658,7 +658,7 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  const examId='scale-check-exam';
  const now=Date.now();
  const questions=[{...pgk,id:'batch-a'},{...pgk,id:'batch-b'}];
- await writeRecord(examId,'exam',{id:examId,title:'Scale check',status:'Aktif',start:new Date(now-60000).toISOString(),end:new Date(now+600000).toISOString(),duration:10});
+ await writeRecord(examId,'exam',{id:examId,title:'Scale check',unit:'SMP',status:'Aktif',start:new Date(now-60000).toISOString(),end:new Date(now+600000).toISOString(),duration:10});
  const insert=sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)');
  const students=Array.from({length:1000},(_,i)=>({id:'scale-check-'+i,token:'SCALE-CHECK-'+i}));
  await Promise.all(students.map(async ({id,token})=>{
@@ -686,4 +686,22 @@ console.log('PASS: six source options are preserved for SMA; seven options still
    assert.equal(row.version,2);
  }
  console.log('PASS: 1,000 synthetic attempts retained every answer; retrying submit produced no additional writes.');
+ await loginCard(ownerCard);
+ const monitoringUrl='https://cbt.test/api/cbt?year=2026%2F2027&semester=1&monitorExam='+examId;
+ const monitor=()=>routes.GET(new Request(monitoringUrl,{headers:{cookie}}));
+ queryReads=[];
+ const response=await monitor();
+ assert.equal(response.status,200);
+ const progress=await response.json();
+ assert.equal(progress.attempts.length,1000);
+ assert(progress.attempts.every(a=>a.answeredCount===2&&a.questionCount===2&&a.status==='Dikumpulkan'&&!('answers' in a)&&!('questions' in a)));
+ assert(queryReads.every(read=>!['bank','snapshot','draft','audit'].includes(read.values[0])));
+ const outsideMonitor={username:'monitor-outside-qa',password:'monitor-outside-test-only'};
+ const outsideMonitorId='monitor-outside-staff';
+ await writeRecord(outsideMonitorId,'staff',{role:'Admin Unit',unit:'SD',name:'QA Monitoring'});
+ await authlib.writeRecord('credential-'+outsideMonitor.username,'credential',{staffId:outsideMonitorId,username:outsideMonitor.username,salt:'monitor-qa',hash:await pw.passwordHash(outsideMonitor.password,'monitor-qa')});
+ await loginCard(outsideMonitor);
+ assert.equal((await monitor()).status,403);
+ console.log('PASS: 1,000 monitoring summaries without question payloads or bank reads; out-of-unit access denied.');
+
 }

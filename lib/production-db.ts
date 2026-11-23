@@ -16,7 +16,8 @@ function connection() {
 function postgresQuery(source: string) {
   let q=source;
   if (/^INSERT OR IGNORE INTO /.test(q)) q=q.replace('INSERT OR IGNORE','INSERT')+' ON CONFLICT DO NOTHING';
-  q=q.replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
+  q=q.replace("json_remove(data,'$.questions','$.grades','$.questionOrder')","(data::jsonb - ARRAY['questions','grades','questionOrder'])::text")
+    .replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
     .replace("json_array_length(data,'$.questions')","jsonb_array_length(data::jsonb -> 'questions')")
     .replace("(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(other.data,'$.questions'))=?","(SELECT jsonb_agg(item->'id' ORDER BY ord) FROM jsonb_array_elements(other.data::jsonb->'questions') WITH ORDINALITY AS items(item,ord))=?::jsonb")
     .replace(/json_extract\(((?:other\.)?data),'\$\.(questionOrder|questions)'\)/g,"($1::jsonb ->> '$2')")

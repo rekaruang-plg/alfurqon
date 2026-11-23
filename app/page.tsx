@@ -61,12 +61,12 @@ useEffect(()=>{
  window.addEventListener('focus',refresh);const timer=setInterval(refresh,30000);
  return ()=>{cancelled=true;clearInterval(timer);window.removeEventListener('focus',refresh)};
 },[data?.staff?.id,data?.activeYear,modal,studentMode]);
-useEffect(()=>{if(studentMode||!data||(!data.studentPortal&&tab!=='Monitoring'))return;
+useEffect(()=>{if(studentMode||!data?.studentPortal)return;
  const dates=(data.attempts||[]).filter((a:any)=>a.status==='Mengerjakan'&&(!a.pausedAt||a.securityLocked)&&Number.isFinite(a.deadline)).map((a:any)=>a.deadline);
  if(!dates.length)return;const timer=setTimeout(()=>void load(),Math.max(250,Math.min(...dates)-Date.now()+100));return()=>clearTimeout(timer);
 },[data,tab,studentMode]);
 useEffect(()=>{load();if(new URLSearchParams(location.search).has('siswa'))setStudentMode(true)},[]);
-useEffect(()=>{if(tab!=='Monitoring'||!data?.staff)return;const t=setInterval(async()=>{try{const r=await fetch(dataUrl());if(r.ok){const next:any=await r.json();if(next.period?.year!==next.activeYear){localStorage.removeItem('cbt-period');await load();}else acceptData(next);}else if(r.status===401){setData(null);setModal('');setForm({})}}catch{}},15000);return()=>clearInterval(t)},[tab,data?.staff?.id]);
+
 useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t)},[toast]);
 const draftKey='cbt-question-draft-'+(data?.staff?.id||'')+'-'+(data?.period?.year||'')+'-'+(data?.period?.semester||1);
 useEffect(()=>{if(modal!=='bank'||!data?.staff||JSON.stringify(form)===bankInitial.current)return;try{localStorage.setItem(draftKey,JSON.stringify(form));setDraftNotice('Draft otomatis tersimpan di perangkat ini.')}catch{setDraftNotice('Penyimpanan perangkat penuh. Gunakan Simpan draft untuk menyimpan ke server.')}},[modal,form,draftKey]);
