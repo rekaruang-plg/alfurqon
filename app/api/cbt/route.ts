@@ -9,6 +9,8 @@ import { starterQuestions,uniqueQuestionOrder,mark,choiceSet, type Question } fr
 import { subjectCatalog,sampleQuestions } from '../../../lib/simulations';
 import { sealToken,openToken } from '../../../lib/token-vault';
 export const dynamic='force-dynamic';
+const STUDENT_DISCONNECT_LIMIT_MS=20*60_000;
+const STUDENT_DISCONNECT_REASON='Sesi tidak terhubung lebih dari 20 menit';
 async function handlers(req:Request){
 let requestBody:any=null;
 if(req.method==='POST'){
@@ -170,10 +172,10 @@ async function settleAttempt(a:any){
  if(a.pauseUntil&&Date.now()>=a.pauseUntil){const duration=a.pauseUntil-a.pausedAt;a.deadline+=duration;a.submitAfter=(a.submitAfter||0)+duration;a.lastSeenAt=a.pauseUntil;delete a.pausedAt;delete a.pauseUntil;delete a.remainingMs;delete a.remainingSubmitMs;await saveAttempt(a);}
  if(a.pausedAt&&!a.securityLocked)return;
  const now=Date.now(), cutoff=Number(a.deadline);
- const disconnected=!a.pausedAt&&a.strictExit&&now-(a.lastSeenAt||a.startedAt)>120000;
+ const disconnected=!a.pausedAt&&a.strictExit&&now-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;
  if(!(now>=cutoff)&&!disconnected)return;
  a.status='Dikumpulkan';a.timedOut=now>=cutoff;a.submittedAt=a.timedOut?cutoff:now;
- a.exitReason=a.timedOut?'Waktu ujian berakhir':'Sesi tidak terhubung lebih dari 2 menit';
+ a.exitReason=a.timedOut?'Waktu ujian berakhir':STUDENT_DISCONNECT_REASON;
  delete a.securityLocked;delete a.securityReason;delete a.pausedAt;delete a.remainingMs;delete a.remainingSubmitMs;
  a.grades=mark(a.questions,a.answers);await saveAttempt(a);
 }
@@ -234,14 +236,14 @@ async function monitoringProgress(staff:any,examId:string){
      lastSeenAt=attempt.pauseUntil;
      pausedAt=undefined;
    }
-   const disconnected=!pausedAt&&attempt.strictExit&&now-lastSeenAt>120000;
+   const disconnected=!pausedAt&&attempt.strictExit&&now-lastSeenAt>STUDENT_DISCONNECT_LIMIT_MS;
    if(status==='Mengerjakan'&&(!pausedAt||securityLocked)&&(now>=deadline||disconnected)){
      status='Dikumpulkan';
      timedOut=now>=deadline;
      submittedAt=timedOut?deadline:now;
      pausedAt=undefined;
      securityLocked=false;
-     exitReason=timedOut?'Waktu ujian berakhir':'Sesi tidak terhubung lebih dari 2 menit';
+     exitReason=timedOut?'Waktu ujian berakhir':STUDENT_DISCONNECT_REASON;
    }
    return {id:row.id,examId:row.exam_id,studentId:row.student_id,status,timedOut,submittedAt,
      pausedAt,securityLocked,exitReason,resetCount:attempt.resetCount||0,actionNotes:attempt.actionNotes,
@@ -313,7 +315,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  }
  if(b.action!=='enter'&&a.status==='Belum mulai')fail('Mulai ujian terlebih dahulu.');
  if(a.status==='Mengerjakan'){
- const disconnected=a.strictExit&&Date.now()-(a.lastSeenAt||a.startedAt)>120000;const expired=Date.now()>=a.deadline||disconnected;
+ const disconnected=a.strictExit&&Date.now()-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;const expired=Date.now()>=a.deadline||disconnected;
  if(b.action==='securityLock'&&!expired&&a.browserGuard){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}if((a.resetCount||0)>=1){a.status='Dikumpulkan';a.submittedAt=Date.now();a.exitReason='Pelanggaran kedua setelah reset token';a.grades=mark(a.questions,a.answers);a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Jawaban otomatis dikumpulkan',reason:a.exitReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}a.securityLocked=true;a.securityReason=b.reason==='fullscreen'?'Keluar dari layar penuh':'Berpindah tab / halaman tidak terlihat';a.pausedAt=Date.now();a.remainingMs=Math.max(0,a.deadline-Date.now());a.remainingSubmitMs=Math.max(0,(a.submitAfter||0)-Date.now());a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Kunci halaman ujian',reason:a.securityReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}
  if((b.action==='answer'||b.action==='saveAnswers')&&!expired){
    const entries=b.action==='answer'?[[b.questionId,b.value]]:Object.entries(b.answers||{});
@@ -332,7 +334,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  }
  if(b.action==='submit'&&!expired){const issue=submissionIssue(a);if(issue)fail(issue);}
  if(b.action==='exitExam'&&!expired){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}a.exitReason='Keluar dari halaman ujian';}
- if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired&&!disconnected;if(disconnected)a.exitReason='Sesi tidak terhubung lebih dari 2 menit';a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}
+ if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired&&!disconnected;if(disconnected)a.exitReason=STUDENT_DISCONNECT_REASON;a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}
  }
  return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
 }
