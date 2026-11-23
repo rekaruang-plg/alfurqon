@@ -50,3 +50,22 @@
 
 .rich-question:dir(rtl), .rich-text-field textarea:dir(rtl), .essay:dir(rtl){font-family:"Traditional Arabic","Noto Naskh Arabic",serif;text-align:right;}
 .rich-question:dir(rtl){display:block;}
+
+/* Keep exam instructions readable on small screens and distinguish explicit bold. */
+.keyboard-arabic button {
+  font-family: "Traditional Arabic", "Noto Naskh Arabic", serif;
+  font-size: 28px;
+  min-width: 44px;
+  min-height: 44px;
+  line-height: 1.2;
+}
+.exam-fields .student-question-stem { font-weight: 400; }
+.rich-question strong { font-weight: 750; }
+.rich-question img { margin-inline: auto; }
+.rich-question .question-align-left img { margin-left: 0; margin-right: auto; }
+.rich-question .question-align-right img { margin-left: auto; margin-right: 0; }
+.exam-fields .matching .field > span {
+  font-size: 17px;
+  line-height: 1.6;
+  color: inherit;
+}

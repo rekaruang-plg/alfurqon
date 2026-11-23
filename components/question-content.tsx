@@ -8,8 +8,8 @@ import 'katex/dist/katex.min.css';
 export function QuestionContent({text,images=[]}:{text:string;images?:string[]}){
  function render(value:string,depth=0):React.ReactNode{
   if(depth>20)return value;
-  return value.split(/(\\\([\s\S]*?\\\)|\[\[image:\d+\]\]|\[left\][\s\S]*?\[\/left\]|\[right\][\s\S]*?\[\/right\]|\[center\][\s\S]*?\[\/center\]|\[b\][\s\S]*?\[\/b\]|\[i\][\s\S]*?\[\/i\]|\[u\][\s\S]*?\[\/u\])/g).map((p,i)=>{
-   const align=p.match(/^\[(left|right|center)\]([\s\S]*)\[\/\1\]$/);if(align)return <span key={i} style={{display:'block',textAlign:align[1] as 'left'|'right'|'center'}}>{render(align[2],depth+1)}</span>;
+  return value.split(/(\\\([\s\S]*?\\\)|\[\[image:\d+\]\]|\[left\][\s\S]*?\[\/left\]|\[right\][\s\S]*?\[\/right\]|\[center\][\s\S]*?\[\/center\]|\[justify\][\s\S]*?\[\/justify\]|\[b\][\s\S]*?\[\/b\]|\[i\][\s\S]*?\[\/i\]|\[u\][\s\S]*?\[\/u\])/g).map((p,i)=>{
+   const align=p.match(/^\[(left|right|center|justify)\]([\s\S]*)\[\/\1\]$/);if(align)return <span key={i} className={'question-align-'+align[1]} style={{display:'block',textAlign:align[1] as 'left'|'right'|'center'|'justify'}}>{render(align[2],depth+1)}</span>;
    const format=p.match(/^\[(b|i|u)\]([\s\S]*)\[\/\1\]$/);if(format){const child=render(format[2],depth+1);return format[1]==='b'?<strong key={i}>{child}</strong>:format[1]==='i'?<em key={i}>{child}</em>:<u key={i}>{child}</u>;}
    const img=p.match(/^\[\[image:(\d+)\]\]$/);if(img){const src=images[Number(img[1])];return src&&/^data:image\/(png|jpeg|webp);base64,/.test(src)?<ZoomImage key={i} src={src}/>:<span key={i}>[Gambar tidak tersedia]</span>;}
    if(p.startsWith('\\(')&&p.endsWith('\\)')){try{return <span key={i} dangerouslySetInnerHTML={{__html:katex.renderToString(p.slice(2,-2),{throwOnError:true,trust:false,strict:'ignore',output:'htmlAndMathml',maxExpand:100,maxSize:20})}}/>}catch{return <span className="math-error" key={i}>{p} [periksa rumus]</span>}}
