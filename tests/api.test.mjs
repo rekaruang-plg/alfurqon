@@ -584,6 +584,65 @@ assert(queryReads.some(read=>read.query.includes("json_extract(data,'$.status') 
 const makeup6=await call('makeup',{period,examId:'r6-exam-sd',studentId:'r6-pupil-sd',reason:'Siswa datang setelah ujian pertama selesai',start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});assert(makeup6.examId);assert(makeup6.token);
 console.log('PASS: Rev6 super admin sees three units, each unit admin only its unit, cross-unit retake/token denied, proctor only assigned class and can create reasoned follow-up without grading access.');
 }
+// Admin menu contracts keep question and answer bodies behind individual detail requests.
+{
+ const period={year:'2044/2045',semester:1};
+ const read=async(params,status=200)=>{
+   const query=new URLSearchParams({year:period.year,semester:String(period.semester),...params});
+   const response=await routes.GET(new Request('https://cbt.test/api/cbt?'+query,{headers:cookie?{cookie}:{}}));
+   const body=await response.json();
+   assert.equal(response.status,status,JSON.stringify(body));
+   return body;
+ };
+ const bankId='r6-bank-sd',examId='scoped-exam-sd',studentId='r6-pupil-sd';
+ await writeRecord(examId,'exam',{...await record('r6-exam-sd'),id:examId,bankId});
+ const question={id:'scoped-question',sourceId:'original-source',type:'PG',scope:'Lingkup QA',text:'PRIVATE_QUESTION_TEXT',key:'0',options:['a','b'],points:10,images:['data:image/png;base64,AAAA']};
+ await writeRecord(bankId,'bank',{title:'Scoped image package',unit:'SD',subject:'Matematika',year:period.year,semester:1,questions:[question]});
+ await writeRecord('snapshot-'+examId,'snapshot',{questions:[question]});
+ const attemptId='scoped-grade-test';
+ sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)').run(attemptId,studentId,examId,'scoped-grade-hash',JSON.stringify({id:attemptId,studentId,examId,questions:[question],answers:{'scoped-question':'0'},grades:{'scoped-question':10},graded:true,status:'Dikumpulkan',sessionHash:'private-session'}));
+ cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
+ await writeRecord('scoped-draft','draft',{ownerId:(await state(period)).staff.id,year:period.year,semester:1,form:{title:'Draf tersimpan',questions:[question]}});
+ for(const menu of ['Dashboard','Tahun Pelajaran','Kelas','Siswa','Guru','Mata pelajaran','Jadwal ujian','Token ujian','Monitoring','Koreksi & nilai','Bank soal','Buat soal','Simulasi ujian','Pengelola','Riwayat aktivitas']){
+   queryReads=[];
+   const result=await read({menu});
+   assert.equal(result.menu,menu);
+   assert(!JSON.stringify(result).includes('PRIVATE_QUESTION_TEXT'),menu);
+   assert(!JSON.stringify(result).includes('private-session'),menu);
+   if(!['Bank soal','Buat soal','Simulasi ujian'].includes(menu))assert(queryReads.every(row=>!['bank','snapshot','draft'].includes(row.values[0])),menu);
+   if(!['Token ujian','Monitoring','Koreksi & nilai'].includes(menu))assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
+ }
+ const bank=await read({menu:'Bank soal'});
+ assert.equal(bank.banks.find(b=>b.id===bankId).questions[0].scope,question.scope);
+ assert(bank.exams.find(e=>e.id===examId).questionSources.includes(question.sourceId));
+ assert.equal((await read({detail:'bank',id:bankId})).questions[0].text,question.text);
+ const draftIndex=await read({menu:'Buat soal'});
+ assert.equal(draftIndex.drafts.find(d=>d.id==='scoped-draft').form.title,'Draf tersimpan');
+ assert.equal((await read({detail:'draft',id:'scoped-draft'})).questions[0].text,question.text);
+ const gradeIndex=await read({menu:'Koreksi & nilai'});
+ assert(gradeIndex.attempts.find(a=>a.id===attemptId).graded);
+ const examDetails=await read({detail:'gradeExam',id:examId});
+ const summary=examDetails.attempts.find(a=>a.id===attemptId);
+ assert.equal(summary.answeredCount,1);
+ assert.equal(summary.questionCount,1);
+ assert(!('answers' in summary)&&!('questions' in summary));
+ const grade=await read({detail:'grade',id:attemptId});
+ assert.equal(grade.answers['scoped-question'],'0');
+ assert.equal(grade.questions[0].text,question.text);
+ assert(!('sessionHash' in grade));
+ user={email:'r6-admin-smp@test.invalid',displayName:'Admin SMP'};
+ const limited=await read({menu:'Bank soal'});
+ assert(limited.banks.length>0&&limited.banks.every(b=>b.unit==='SMP'));
+ await read({detail:'bank',id:bankId},404);
+ await read({detail:'gradeExam',id:examId},404);
+ await read({detail:'grade',id:attemptId},404);
+ await read({detail:'draft',id:'scoped-draft'},404);
+ await read({menu:'Pengelola'},403);
+ user={email:'r6-admin-sd@test.invalid',displayName:'Admin SD'};
+ assert.equal((await read({detail:'grade',id:attemptId})).id,attemptId);
+ assert.equal((await read({detail:'bank',id:bankId})).id,bankId);
+ console.log('PASS: all 15 admin menu data scopes, deferred package/draft/grading detail, and unit access checks.');
+}
 // Import approval permits warnings and missing keys, with explicit manual grading.
 {
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};

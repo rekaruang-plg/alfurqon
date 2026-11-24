@@ -18,7 +18,11 @@ function postgresQuery(source: string) {
   if (/^INSERT OR IGNORE INTO /.test(q)) q=q.replace('INSERT OR IGNORE','INSERT')+' ON CONFLICT DO NOTHING';
   q=q.replace(/json_remove\(data,('\$\.[a-zA-Z]+'(?:,'\$\.[a-zA-Z]+')*)\)/g,(_match,paths:string)=>
     "(data::jsonb - ARRAY["+paths.replaceAll("$.","")+"])::text")
-    .replaceAll("json_extract(data,'$.status')","(data::jsonb ->> 'status')")
+    .replace(/json_extract\(data,'\$\.(status|unit|ownerId|simulation|at|graded|published|correctedAt|deadline|pausedAt|securityLocked)'\)/g,"(data::jsonb ->> '$1')")
+    .replace(" IN (1,'true')"," = 'true'")
+    .replace("json_extract(data,'$.form.title')","(data::jsonb #>> '{form,title}')")
+    .replace("(SELECT json_group_array(json_object('id',json_extract(value,'$.id'),'sourceId',json_extract(value,'$.sourceId'),'type',json_extract(value,'$.type'),'scope',json_extract(value,'$.scope'))) FROM json_each(records.data,'$.questions'))","(SELECT jsonb_agg(jsonb_build_object('id',q->'id','sourceId',q->'sourceId','type',q->'type','scope',q->'scope'))::text FROM jsonb_array_elements(NULLIF(records.data::jsonb->'questions','null'::jsonb)) AS items(q))")
+    .replace("(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'')","(SELECT count(*) FROM jsonb_each_text(NULLIF(attempts.data::jsonb->'answers','null'::jsonb)) WHERE value<>'')")
     .replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
     .replace("json_array_length(data,'$.questions')","jsonb_array_length(data::jsonb -> 'questions')")
     .replace("(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(other.data,'$.questions'))=?","(SELECT jsonb_agg(item->'id' ORDER BY ord) FROM jsonb_array_elements(other.data::jsonb->'questions') WITH ORDINALITY AS items(item,ord))=?::jsonb")
