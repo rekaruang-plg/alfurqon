@@ -23,7 +23,7 @@ const pw=evaluate(fs.readFileSync('lib/password.ts','utf8'),{});
 const record=async key=>{const r=sql.prepare('SELECT * FROM records WHERE id=?').get(key);return r?{...JSON.parse(r.data),id:r.id}:null};
 const records=async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id}));
 const writeRecord=async(key,kind,data)=>sql.prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=records.version+1').run(key,kind,JSON.stringify(data));
-const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8')),{record,records,writeRecord,authDB:()=>DB,...pw,...vault,env:{TOKEN_VAULT_KEY:'ab'.repeat(32)}});
+const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8')),{record,records,writeRecord,authDB:()=>DB,...pw,...vault,env:{get TOKEN_VAULT_KEY(){return Promise.resolve('ab'.repeat(32));}}});
 const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{DB},getChatGPTUser:async()=>null,...pw});
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...authlib,...pw,...model,standardPassword:generated.standardPassword});

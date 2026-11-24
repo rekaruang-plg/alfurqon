@@ -7,13 +7,32 @@ export async function generatedAccount(person:any,student=false,demo=false,reset
 const principal=student?'student-login-'+(demo?'demo-':'')+person.id:person.id;
 const existing=(await records('credential')).find((x:any)=>x.staffId===principal);
 let base=(student?`${demo?'demo.':''}${person.nis}`:((demo?'demo.':'')+(person.niy||(person.role&&person.role!=='Guru'?String(person.email||'admin').split('@')[0]:`${person.unit}.${person.contractNo||'001'}K`)))).toLowerCase().normalize('NFKD').replace(/[^a-z0-9._-]/g,'').slice(0,48);if(!base)base='akun';
-if(existing&&(student&&reset)&&existing.username!==base){const occupied=await record('credential-'+base);if(occupied&&occupied.staffId!==principal)throw Error('Nomor induk / username sudah digunakan akun lain.');await writeRecord('credential-'+base,'credential',{...existing,username:base,revision:randomSecret()});await authDB().prepare('DELETE FROM records WHERE id=?').bind('credential-'+existing.username).run();existing.username=base;}
-if(existing&&!reset){if(student)await writeRecord(principal,'student_identity',{name:person.name,email:existing.username+'@student.invalid',role:'Siswa',unit:person.unit,studentId:person.id,demo});const vault=await record('account-vault-'+principal);return {username:existing.username,password:vault?await openToken(vault,principal,env.TOKEN_VAULT_KEY):null};}
-let username=existing?.username||base;let n=1;while(!existing&&await record('credential-'+username))username=base+'.'+n++;
+if(existing&&!reset){
+ const vault=await record('account-vault-'+principal);
+ const password=vault?await openToken(vault,principal,await env.TOKEN_VAULT_KEY):null;
+ if(student)await writeRecord(principal,'student_identity',{name:person.name,email:existing.username+'@student.invalid',role:'Siswa',unit:person.unit,studentId:person.id,demo});
+ return {username:existing.username,password};
+}
+const rename=existing&&student&&reset&&existing.username!==base;
+let username=rename?base:existing?.username||base;
+let n=1;
+while(!existing&&await record('credential-'+username))username=base+'.'+n++;
+const occupied=rename?await record('credential-'+username):null;
+if(occupied&&occupied.staffId!==principal)throw Error('Nomor induk / username sudah digunakan akun lain.');
 const password=standardPassword(student?person.nis:person.niy),salt=randomSecret();
-if(student)await writeRecord(principal,'student_identity',{name:person.name,email:username+'@student.invalid',role:'Siswa',unit:person.unit,studentId:person.id,demo});
+const vault=await sealToken(password,principal,await env.TOKEN_VAULT_KEY);
 const credential={staffId:principal,username,salt,hash:await passwordHash(password,salt),revision:randomSecret()};
-if(existing)await writeRecord('credential-'+username,'credential',credential);else await authDB().prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?)').bind('credential-'+username,'credential',JSON.stringify(credential)).run();
-await writeRecord('account-vault-'+principal,'account_vault',await sealToken(password,principal,env.TOKEN_VAULT_KEY));
+const db=authDB();
+const upsert=(key:string,kind:string,value:unknown)=>db.prepare(
+ 'INSERT INTO records(id,kind,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=records.version+1'
+).bind(key,kind,JSON.stringify(value));
+const writes=[
+ (existing&&!rename||occupied)?upsert('credential-'+username,'credential',credential):
+   db.prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?)').bind('credential-'+username,'credential',JSON.stringify(credential)),
+ upsert('account-vault-'+principal,'account_vault',vault),
+];
+if(student)writes.push(upsert(principal,'student_identity',{name:person.name,email:username+'@student.invalid',role:'Siswa',unit:person.unit,studentId:person.id,demo}));
+if(rename)writes.push(db.prepare('DELETE FROM records WHERE id=?').bind('credential-'+existing.username));
+await db.batch(writes);
 return {username,password};
 }
