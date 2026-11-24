@@ -11,7 +11,7 @@ import { sealToken,openToken } from '../../../lib/token-vault';
 export const dynamic='force-dynamic';
 const STUDENT_DISCONNECT_LIMIT_MS=20*60_000;
 const STUDENT_DISCONNECT_REASON='Sesi tidak terhubung lebih dari 20 menit';
-const adminMenuRecords:Record<string,readonly string[]>={
+const staffMenuRecords:Record<string,readonly string[]>={
  'Dashboard':['student','exam','class','staff'],
  'Tahun Pelajaran':[],
  'Kelas':['student','class','staff'],
@@ -217,19 +217,59 @@ function alignGradingKeys(attempt:any,bank:any){
  if(changed){attempt.graded=false;delete attempt.score;}
  return changed;
 }
-async function studentOverview(studentId:string){
+async function studentOverview(studentId:string,studentMenu?:string|null){
  const student=await get(studentId);if(!student)fail('Data siswa tidak ditemukan.');
+ if(studentMenu&&!['Dashboard','Jadwal ujian','Hasil ujian'].includes(studentMenu))fail('Menu siswa tidak tersedia.');
+ const resultsOnly=studentMenu==='Hasil ujian';
  const mine=(await db().prepare(
-   "SELECT version, CASE WHEN json_extract(data,'$.status')='Mengerjakan' THEN data ELSE json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') END AS data FROM attempts WHERE student_id=?"
- ).bind(student.id).all()).results.map((r:any)=>({...JSON.parse(r.data),version:r.version}));
- for(const a of mine)if(a.status==='Mengerjakan')await settleAttempt(a);
- const base=await rawGet(studentId);
+   "SELECT id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS data FROM attempts WHERE student_id=?"
+ ).bind(student.id).all()).results.map((r:any)=>({...JSON.parse(r.data),id:r.id}));
+ const now=Date.now();
+ for(const summary of mine){
+   if(summary.status!=='Mengerjakan')continue;
+   const resumeDue=summary.pauseUntil&&now>=summary.pauseUntil;
+   const expired=(!summary.pausedAt||summary.securityLocked)&&now>=summary.deadline;
+   const disconnected=!summary.pausedAt&&summary.strictExit&&now-(summary.lastSeenAt||summary.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;
+   if(!resumeDue&&!expired&&!disconnected)continue;
+   const row:any=await db().prepare('SELECT data,version FROM attempts WHERE id=? AND student_id=?').bind(summary.id,student.id).first();
+   if(!row)continue;
+   const attempt={...JSON.parse(row.data),version:row.version};
+   await settleAttempt(attempt);
+   for(const field of ['status','published','score','submittedAt','publishedAt','graded','resetCount','pauseUntil','securityLocked','pausedAt','deadline']){
+     summary[field]=attempt[field];
+   }
+ }
+ const selectedAttempts=resultsOnly?mine.filter((a:any)=>a.status==='Dikumpulkan'):mine;
+ const resultExams:any[]=[];
+ const base=resultsOnly?null:await rawGet(studentId);
+ const examSummarySQL="SELECT id,json_remove(data,'$.instructions','$.duties') AS data FROM records WHERE kind=?";
+ if(resultsOnly){
+   const ids=[...new Set<string>(selectedAttempts.map((a:any)=>a.examId))];
+   for(let offset=0;offset<ids.length;offset+=100){
+     const batch=ids.slice(offset,offset+100);
+     const rows=await db().prepare(examSummarySQL+' AND id IN ('+batch.map(()=>'?').join(',')+')').bind('exam',...batch).all();
+     for(const row of rows.results){
+       const exam=JSON.parse(row.data);
+       if(!exam.deletedAt)resultExams.push({...exam,id:row.id});
+     }
+   }
+ }else{
+   const suffix=':'+studentId;
+   const {results:profiles}=await db().prepare("SELECT json_extract(data,'$.className') AS class_name FROM records WHERE kind IN (?,?) AND substr(id,length(id)-length(?)+1)=?").bind('student_year','academic_profile',suffix,suffix).all();
+   const classNames=[...new Set([student.className,base?.className,...profiles.map((row:any)=>row.class_name)].filter(Boolean))];
+   const classMatch=classNames.length?" OR json_extract(data,'$.className') IN ("+classNames.map(()=>'?').join(',')+")":"";
+   const rows=await db().prepare(examSummarySQL+" AND (id IN (SELECT exam_id FROM attempts WHERE student_id=?) OR EXISTS (SELECT 1 FROM json_each(records.data,'$.studentIds') WHERE value=?)"+classMatch+")").bind('exam',studentId,studentId,...classNames).all();
+   for(const row of rows.results){
+     const exam=JSON.parse(row.data);
+     if(!exam.deletedAt)resultExams.push({...exam,id:row.id});
+   }
+ }
  const profiles=new Map<string,any>();
- const attemptedExams=new Set(mine.map((attempt:any)=>attempt.examId));
- const schedules=[];for(const e of await all('exam')){
+ const attemptedExams=new Set(selectedAttempts.map((attempt:any)=>attempt.examId));
+ const schedules=[];for(const e of resultExams){
  const year=e.year||'2026/2027', semester=Number(e.semester||1);
  const periodKey=year+':'+semester;
- if(!profiles.has(periodKey)){
+ if(!resultsOnly&&!profiles.has(periodKey)){
    const pupil=semester===2
      ? await rawGet('semester2:'+year+':'+studentId)
      : base&&!base.deletedAt&&!base.semester2Only?await annual(base,'student',year):null;
@@ -238,7 +278,7 @@ async function studentOverview(studentId:string){
  const pupil=profiles.get(periodKey);
  const enrolled=!!pupil&&!(e.excludedStudentIds||[]).includes(student.id)&&((e.participantsSelected||e.studentIds?.length)?!!e.studentIds?.includes(student.id):pupil.unit===e.unit&&pupil.className===e.className&&(pupil.year||'2026/2027')===(e.year||'2026/2027'));if(enrolled||attemptedExams.has(e.id))schedules.push({id:e.id,title:e.title,topic:e.topic||e.title,subject:e.subject,unit:e.unit,grade:e.grade,start:e.start,end:e.end,duration:e.duration,status:e.status,retakeReason:e.retakeReason||''});}
 
- return Response.json({student,studentPortal:true,demo,exams:schedules,attempts:mine.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
+ return Response.json({student,studentPortal:true,studentMenu,demo,exams:schedules,attempts:selectedAttempts.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published&&(!studentMenu||resultsOnly)?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
 }
 async function monitoringProgress(staff:any,examId:string){
  const exam=await get(examId);
@@ -275,35 +315,61 @@ async function monitoringProgress(staff:any,examId:string){
  });
  return Response.json({examId,attempts},{headers:{'Cache-Control':'no-store'}});
 }
-async function readAdminMenu(staff:any,menu:string,user:any,authMethod:string){
+function staffDataScope(staff:any,record:any){
+ return staff.role==='Super Admin'||staff.unit===record.unit||staff.role==='Guru'&&(staff.assignments||[]).some((task:any)=>task.unit===record.unit);
+}
+function classesVisibleTo(staff:any,classes:any[],exams:any[]){
+ return classes.filter(c=>staffDataScope(staff,c)).filter(c=>relatedClass(staff,c)||exams.some(e=>e.unit===c.unit&&e.className===c.name&&(
+   examPermission(staff,e,'token')||examPermission(staff,e,'bank')||examPermission(staff,e,'grade')||!staff.assignments?.length&&teaches(staff,e)
+ )));
+}
+function examsVisibleTo(staff:any,exams:any[],classes:any[]){
+ return exams.filter(inPeriod).filter(e=>staffDataScope(staff,e)||examPermission(staff,e,'token'))
+   .filter(e=>['token','bank','grade','monitor'].some(action=>examPermission(staff,e,action))||
+     classes.some(c=>c.homeroomId===staff.id&&c.unit===e.unit&&c.name===e.className));
+}
+function canPreviewBank(staff:any,bank:any,exams:any[]){
+ return staff.role!=='Guru'||teaches(staff,bank)||homeroomCanWrite(staff,bank)||exams.some(e=>e.unit===bank.unit&&e.subject===bank.subject&&
+   (!e.grade||!bank.grade||e.grade===bank.grade)&&(examPermission(staff,e,'bank')||examPermission(staff,e,'grade')));
+}
+
+async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const headers={'Cache-Control':'no-store'};
- if(!Object.hasOwn(adminMenuRecords,menu)||menu==='Pengelola'&&staff.role!=='Super Admin'){
+ const teacher=staff.role==='Guru';
+ if(!Object.hasOwn(staffMenuRecords,menu)||menu==='Pengelola'&&(staff.role!=='Super Admin'||demo)||teacher&&menu==='Riwayat aktivitas'){
    return Response.json({error:'Menu tidak tersedia untuk akun ini.'},{status:403,headers});
  }
- const kinds=adminMenuRecords[menu];
- const scope=(x:any)=>staff.role==='Super Admin'||staff.unit===x.unit;
+ const kinds=staffMenuRecords[menu];
+ const scope=(x:any)=>staffDataScope(staff,x);
  const list=async(kind:string)=>kinds.includes(kind)?(await all(kind)).filter(scope):[];
  const bankMenu=['Bank soal','Buat soal','Simulasi ujian'].includes(menu);
  const needsSources=menu==='Bank soal'||menu==='Buat soal';
  const needsAttempts=['Token ujian','Monitoring','Koreksi & nilai'].includes(menu);
  const needsShared=menu==='Token ujian'||menu==='Monitoring';
+ const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
+ const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
  const [years,students,exams,classes,people,subjects,topics,logs,sharedRows,bankRows,draftRows,loginAccounts]=await Promise.all([
-   all('year'),list('student'),list('exam'),list('class'),list('staff'),list('subject'),list('topic'),
+   all('year'),list('student'),teacher?all('exam'):list('exam'),list('class'),list('staff'),list('subject'),list('topic'),
    menu==='Riwayat aktivitas'?db().prepare("SELECT data FROM records WHERE kind=?"+(staff.role==='Admin Unit'?" AND json_extract(data,'$.unit')=?":"")+" ORDER BY CAST(json_extract(data,'$.at') AS BIGINT) DESC LIMIT 50").bind(...(staff.role==='Admin Unit'?['audit',staff.unit]:['audit'])).all().then(r=>r.results.map((row:any)=>JSON.parse(row.data))):[],
    needsShared?all('shared_token'):[],
-   bankMenu?db().prepare("SELECT id,version,json_remove(data,'$.questions') AS summary,"+questionIndexSQL+" AS question_index FROM records WHERE kind=?"+(staff.role==='Admin Unit'?" AND json_extract(data,'$.unit')=?":"")+(menu==='Simulasi ujian'?" AND json_extract(data,'$.simulation') IN (1,'true')":"")).bind(...(staff.role==='Admin Unit'?['bank',staff.unit]:['bank'])).all().then(r=>r.results):[],
+   bankMenu?db().prepare("SELECT id,version,json_remove(data,'$.questions') AS summary,"+questionIndexSQL+" AS question_index FROM records WHERE kind=?"+bankUnitFilter+(menu==='Simulasi ujian'?" AND json_extract(data,'$.simulation') IN (1,'true')":"")).bind('bank',...bankUnits).all().then(r=>r.results):[],
    menu==='Buat soal'?db().prepare("SELECT id,json_remove(data,'$.form') AS summary,json_extract(data,'$.form.title') AS title FROM records WHERE kind=? AND json_extract(data,'$.ownerId')=?").bind('draft',staff.id).all().then(r=>r.results):[],
    menu==='Pengelola'?authRecords('credential').then(rows=>rows.map((c:any)=>({staffId:c.staffId,username:c.username}))):[],
  ]);
- const banks=bankRows.map((row:any)=>({...JSON.parse(row.summary),id:row.id,version:row.version,questions:JSON.parse(row.question_index||'[]'),summaryOnly:true,canPreviewPackage:true}))
+ const visibleClasses=classesVisibleTo(staff,classes,exams);
+ const teacherClasses=teacher?classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
+ const permittedExams=examsVisibleTo(staff,exams,teacherClasses);
+ const visibleExams=kinds.includes('exam')?permittedExams:[];
+ const banks=bankRows.map((row:any)=>({...JSON.parse(row.summary),id:row.id,version:row.version,questions:JSON.parse(row.question_index||'[]'),summaryOnly:true}))
+   .map((b:any)=>({...b,canPreviewPackage:canPreviewBank(staff,b,permittedExams)}))
    .filter((b:any)=>scope(b)&&(!b.deletedAt||b.retainQuestions))
    .map((b:any)=>b.deletedAt?{...b,archived:true}:b);
- const visibleExams=exams.filter(inPeriod);
  const sources=new Map<string,any[]>();
  const attempts:any[]=[];
  if(needsAttempts||needsSources){
    for(let offset=0;offset<visibleExams.length;offset+=100){
-     const ids=visibleExams.slice(offset,offset+100).map((e:any)=>e.id);
+     const ids=visibleExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
+     if(!ids.length)continue;
      const marks=ids.map(()=>'?').join(',');
      if(needsSources){
        const rows=await db().prepare("SELECT id,"+questionIndexSQL+" AS question_index FROM records WHERE kind=? AND id IN ("+marks+")").bind('snapshot',...ids.map((id:string)=>'snapshot-'+id)).all();
@@ -324,8 +390,12 @@ async function readAdminMenu(staff:any,menu:string,user:any,authMethod:string){
  const bankById=new Map(banks.map((b:any)=>[b.id,b]));
  return Response.json({
    menu,operations:menu==='Monitoring',demo,period,years,activeYear,user,authMethod,staff,loginAccounts,
-   classes:classes.filter(belongsYear),students:students.filter(belongsYear),
-   staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p):menu==='Pengelola'),
+   catalogReady:!demo||!!(await get('catalog-v2')),
+   navigation:teacher?{token:permittedExams.some(e=>examPermission(staff,e,'token')),monitor:permittedExams.some(e=>examPermission(staff,e,'monitor'))}:undefined,
+   classes:visibleClasses.filter(belongsYear),
+   students:students.filter(belongsYear).filter((x:any)=>!teacher||teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),
+   staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p):menu==='Pengelola')
+     .map((p:any)=>teacher?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),
    subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts,
    drafts:draftRows.map((r:any)=>({...JSON.parse(r.summary),id:r.id,form:{title:r.title},summaryOnly:true})).filter(inPeriod),
    exams:visibleExams.map((e:any)=>{
@@ -338,13 +408,13 @@ async function readAdminMenu(staff:any,menu:string,user:any,authMethod:string){
  },{headers});
 }
 
-async function readAdminMenuDetail(staff:any,kind:string,key:string){
+async function readStaffMenuDetail(staff:any,kind:string,key:string){
  const headers={'Cache-Control':'no-store'};
  const missing=()=>Response.json({error:'Detail tidak tersedia pada unit atau periode ini.'},{status:404,headers});
  if(kind==='bank'){
    const bank=await get(key);
-   if(!bank||bank._kind!=='bank'||bank.deletedAt&&!bank.retainQuestions||staff.role!=='Super Admin'&&bank.unit!==staff.unit)return missing();
-   return Response.json({...bank,archived:!!bank.deletedAt,canPreviewPackage:true},{headers});
+   if(!bank||bank._kind!=='bank'||bank.deletedAt&&!bank.retainQuestions||!staffDataScope(staff,bank))return missing();
+   return Response.json({...bank,archived:!!bank.deletedAt},{headers});
  }
  if(kind==='draft'){
    const draft=await get(key);
@@ -384,16 +454,16 @@ async function readAdminMenuDetail(staff:any,kind:string,key:string){
 
 async function GET(req:Request){try{
  const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'');
- if(staff.role==='Siswa')return await studentOverview(staff.studentId);
- const adminScope=!demo&&['Super Admin','Admin Unit'].includes(staff.role);
- if(adminScope&&query.has('detail'))return await readAdminMenuDetail(staff,query.get('detail')||'',query.get('id')||'');
+ if(staff.role==='Siswa')return await studentOverview(staff.studentId,query.get('studentMenu'));
+ const staffScope=(!demo||query.get('menuVersion')==='2')&&['Super Admin','Admin Unit','Guru'].includes(staff.role);
+ if(staffScope&&query.has('detail'))return await readStaffMenuDetail(staff,query.get('detail')||'',query.get('id')||'');
  const menu=query.get('menu');
- if(adminScope&&menu&&Object.hasOwn(adminMenuRecords,menu)&&!adminMenuRecords[menu].includes('subject')){
+ if(staffScope&&menu&&Object.hasOwn(staffMenuRecords,menu)&&!staffMenuRecords[menu].includes('subject')){
    await ensureMasters();
-   return await readAdminMenu(staff,menu,user,authMethod);
+   return await readStaffMenu(staff,menu,user,authMethod);
  }
  await ensureMasters();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SD')await ensureSdSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMP')await ensureSmpSubjects();if(staff.role==='Super Admin'||staff.role==='Admin Unit'&&staff.unit==='SMA')await ensureSmaSubjects();
- if(adminScope&&query.has('menu'))return await readAdminMenu(staff,query.get('menu')||'',user,authMethod);
+ if(staffScope&&query.has('menu'))return await readStaffMenu(staff,query.get('menu')||'',user,authMethod);
  const operations=query.get('view')==='operations'&&!demo;
  const [students,exams,people,logs,classes,subjects,topics,bankRows]=await Promise.all([
    all('student'),all('exam'),all('staff'),operations?[]:all('audit'),all('class'),all('subject'),all('topic'),
@@ -401,9 +471,9 @@ async function GET(req:Request){try{
      result.results.map((row:any)=>({...JSON.parse(row.data),id:row.id,version:row.version}))),
  ]);
  const banks=bankRows.filter((bank:any)=>!bank.deletedAt);
- const scope=(x:any)=>staff.role==='Super Admin'||x.unit===staff.unit||(staff.role==='Guru'&&(staff.assignments||[]).some((t:any)=>t.unit===x.unit));
- const visibleClasses=classes.filter(scope).filter((c:any)=>relatedClass(staff,c)||exams.some((e:any)=>e.unit===c.unit&&e.className===c.name&&(examPermission(staff,e,'token')||examPermission(staff,e,'bank')||examPermission(staff,e,'grade')))||(!staff.assignments?.length&&exams.some((e:any)=>e.unit===c.unit&&e.className===c.name&&teaches(staff,e))));
- const examsVisible=exams.filter(inPeriod).filter((e:any)=>scope(e)||examPermission(staff,e,'token')).filter((e:any)=>examPermission(staff,e,'token')||examPermission(staff,e,'bank')||examPermission(staff,e,'grade')||examPermission(staff,e,'monitor')||visibleClasses.some((c:any)=>c.homeroomId===staff.id&&c.unit===e.unit&&c.name===e.className));
+ const scope=(x:any)=>staffDataScope(staff,x);
+ const visibleClasses=classesVisibleTo(staff,classes,exams);
+ const examsVisible=examsVisibleTo(staff,exams,visibleClasses);
  const examsById=new Map<string,any>(examsVisible.map((exam:any)=>[exam.id,exam]));
  const banksById=new Map<string,any>(banks.map((bank:any)=>[bank.id,bank]));
  const examIds=[...examsById.keys()];
@@ -426,7 +496,7 @@ async function GET(req:Request){try{
  const [sharedRows,snapshotRows]=await Promise.all([all('shared_token'),operations?[]:all('snapshot')]);
  banks.push(...bankRows.filter((bank:any)=>bank.deletedAt&&bank.retainQuestions).map((bank:any)=>({...bank,archived:true})));
  const safeAttempts=operations?rs:rs.map(({sessionHash,...a}:any)=>{const e=examsById.get(a.examId);if(staff.role==='Guru'&&!examPermission(staff,e,'grade'))return {id:a.id,studentId:a.studentId,examId:a.examId,status:a.status,published:a.published,score:a.published?a.score:null,graded:a.graded,readOnly:true,submittedAt:a.submittedAt,timedOut:a.timedOut,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,securityReason:a.securityReason,pausedAt:a.pausedAt,actionNotes:a.actionNotes,answeredCount:Object.values(a.answers||{}).filter(Boolean).length,questionCount:a.questions?.length||0};return a;});
- return Response.json({demo,operations,period,classes:visibleClasses.filter((c:any)=>c.year===period.year),topics:topics.filter(scope).filter(inPeriod),years:await all('year'),activeYear,authMethod,loginAccounts:staff.role==='Super Admin'&&!demo&&!operations?(await authRecords('credential')).map((c:any)=>({staffId:c.staffId,username:c.username})):[],catalogReady:!!(await get('catalog-v2')),subjects:subjects.filter(scope),user,staff,students:students.filter((s:any)=>(s.year||'2026/2027')===period.year).filter(scope).filter((x:any)=>staff.role!=='Guru'||visibleClasses.some((c:any)=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),exams:examsVisible.map((e:any)=>({...e,tokenExpiresAt:(()=>{const t=sharedRows.find((v:any)=>v.id==='shared-'+e.id);return t?(t.issuedSlot===undefined?Math.floor(Date.now()/900000)+1:t.issuedSlot+1)*900000:0})(),questionSources:(snapshotRows.find((x:any)=>x.id==='snapshot-'+e.id)?.questions||banks.find((b:any)=>b.id===e.bankId)?.questions||[]).map((q:any)=>q.sourceId||q.id),canMonitor:examPermission(staff,e,'monitor'),canManageAttempt:examPermission(staff,e,'monitor'),canProctor:examPermission(staff,e,'token'),canGrade:examPermission(staff,e,'grade'),canWrite:examPermission(staff,e,'bank')})),banks:banks.filter(scope).map((b:any)=>({...b,canPreviewPackage:staff.role!=='Guru'||teaches(staff,b)||homeroomCanWrite(staff,b)||examsVisible.some((e:any)=>e.unit===b.unit&&e.subject===b.subject&&(!e.grade||!b.grade||e.grade===b.grade)&&(examPermission(staff,e,'bank')||examPermission(staff,e,'grade')))})),drafts:(operations?[]:await all('draft')).filter((d:any)=>d.ownerId===staff.id&&inPeriod(d)),staffList:people.filter((x:any)=>x.role!=='Guru'||belongsYear(x)).filter(scope).filter((p:any)=>staff.role==='Super Admin'||p.role==='Guru').map((p:any)=>staff.role==='Guru'?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),attempts:safeAttempts,audit:staff.role==='Guru'?[]:logs.filter(scope).slice(-50).reverse()},{headers:{'Cache-Control':'no-store'}});
+ return Response.json({demo,operations,period,classes:visibleClasses.filter((c:any)=>c.year===period.year),topics:topics.filter(scope).filter(inPeriod),years:await all('year'),activeYear,authMethod,loginAccounts:staff.role==='Super Admin'&&!demo&&!operations?(await authRecords('credential')).map((c:any)=>({staffId:c.staffId,username:c.username})):[],catalogReady:!!(await get('catalog-v2')),subjects:subjects.filter(scope),user,staff,students:students.filter((s:any)=>(s.year||'2026/2027')===period.year).filter(scope).filter((x:any)=>staff.role!=='Guru'||visibleClasses.some((c:any)=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),exams:examsVisible.map((e:any)=>({...e,tokenExpiresAt:(()=>{const t=sharedRows.find((v:any)=>v.id==='shared-'+e.id);return t?(t.issuedSlot===undefined?Math.floor(Date.now()/900000)+1:t.issuedSlot+1)*900000:0})(),questionSources:(snapshotRows.find((x:any)=>x.id==='snapshot-'+e.id)?.questions||banks.find((b:any)=>b.id===e.bankId)?.questions||[]).map((q:any)=>q.sourceId||q.id),canMonitor:examPermission(staff,e,'monitor'),canManageAttempt:examPermission(staff,e,'monitor'),canProctor:examPermission(staff,e,'token'),canGrade:examPermission(staff,e,'grade'),canWrite:examPermission(staff,e,'bank')})),banks:banks.filter(scope).map((b:any)=>({...b,canPreviewPackage:canPreviewBank(staff,b,examsVisible)})),drafts:(operations?[]:await all('draft')).filter((d:any)=>d.ownerId===staff.id&&inPeriod(d)),staffList:people.filter((x:any)=>x.role!=='Guru'||belongsYear(x)).filter(scope).filter((p:any)=>staff.role==='Super Admin'||p.role==='Guru').map((p:any)=>staff.role==='Guru'?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),attempts:safeAttempts,audit:staff.role==='Guru'?[]:logs.filter(scope).slice(-50).reverse()},{headers:{'Cache-Control':'no-store'}});
  }catch(e:any){return Response.json({error:e.message},{status:401})}}
 async function handleChildPost(req:Request){return (await handlers(req)).POST(req);}
 async function POST(req:Request){try{const b=requestBody;if(identity?.staff&&b.activeYearAtOpen&&b.activeYearAtOpen!==activeYear)fail('Tahun pelajaran aktif telah berubah. Tutup editor lalu perbarui dashboard.');
@@ -450,7 +520,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  if(a.securityLocked){if(b.action==='enter'||b.action==='heartbeat'||b.action==='securityLock'||b.action==='exitExam')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});fail('Ujian terkunci. Gunakan Request token untuk satu kesempatan melanjutkan.');}
  if(!a.sessionHash&&a.pausedAt&&b.action==='heartbeat')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
  if(!a.sessionHash){if(b.action!=='enter')fail(a.pausedAt?'Waktu ujian dijeda oleh pengawas. Masuk ulang untuk melanjutkan.':'Masuk ulang terlebih dahulu.');a.sessionHash=sessionHash;await saveAttempt(a);}
- if(b.action==='tokenDashboard')return studentOverview(a.studentId);
+ if(b.action==='tokenDashboard')return studentOverview(a.studentId,b.studentMenu);
  if(a.pauseUntil){if(['heartbeat','enter','exitExam'].includes(b.action))return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});fail('Waktu ujian sedang dijeda pengawas. Tunggu jeda selesai.');}
  if(b.action==='enter'&&a.pausedAt){a.deadline=Date.now()+a.remainingMs;a.submitAfter=Date.now()+(a.remainingSubmitMs||0);delete a.pausedAt;delete a.remainingMs;delete a.remainingSubmitMs;await saveAttempt(a);}
  if(a.pausedAt&&b.action==='exitExam')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});

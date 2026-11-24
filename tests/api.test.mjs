@@ -124,7 +124,8 @@ for(let i=0;i<404;i++)await writeRecord('scale-exam-'+i,'exam',{...reviewExams[0
 queryReads=[];
 const scaledPortal=await state();
 assert.equal(scaledPortal.exams.filter(e=>e.id.startsWith('scale-exam-')).length,202);
-assert(!queryReads.some(r=>['student','student_year','academic_profile'].includes(r.values[0])),'Student dashboard must fetch individual profiles by ID, never full rosters');
+assert(!queryReads.some(r=>r.values[0]==='student'),'Student dashboard must not fetch a full roster');
+assert(queryReads.filter(r=>['student_year','academic_profile'].includes(r.values[0])).every(r=>r.query.includes('substr(id,')&&r.values.at(-1)===':'+pupil.id),'Student dashboard must scope annual profiles to this student');
 assert(!queryReads.some(r=>['bank','staff','audit','draft'].includes(r.values[0])),'Student dashboard must not fetch staff-only data');
 sql.prepare("DELETE FROM records WHERE id LIKE 'scale-exam-%'").run();
 console.log('PASS: student dashboard handles 404 schedules with bounded roster reads and correct exclusions.');
@@ -641,7 +642,39 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  user={email:'r6-admin-sd@test.invalid',displayName:'Admin SD'};
  assert.equal((await read({detail:'grade',id:attemptId})).id,attemptId);
  assert.equal((await read({detail:'bank',id:bankId})).id,bankId);
- console.log('PASS: all 15 admin menu data scopes, deferred package/draft/grading detail, and unit access checks.');
+ user={email:'r6-proctor@test.invalid',displayName:'Pengawas SD'};
+ const teacherList=await read({menu:'Guru'});
+ assert.equal(teacherList.menu,'Guru');
+ assert(teacherList.navigation.token&&teacherList.navigation.monitor);
+ assert(!teacherList.banks.length&&!teacherList.exams.length&&!teacherList.attempts.length);
+ const teacherToken=await read({menu:'Token ujian'});
+ assert(teacherToken.exams.length>0&&teacherToken.exams.every(e=>e.unit==='SD'));
+ const teacherGrades=await read({menu:'Koreksi & nilai'});
+ assert(!teacherGrades.attempts.some(a=>a.id===attemptId));
+ await read({detail:'gradeExam',id:examId},404);
+ await read({detail:'bank',id:'r6-bank-smp'},404);
+ await read({menu:'Pengelola'},403);
+ user={email:'qa@example.test',displayName:'QA Admin'};
+ const pupilCard=(await call('accountCards',{period,kind:'student',id:studentId})).cards[0];
+ await loginCard(pupilCard);
+ queryReads=[];
+ const pupilResults=await read({studentMenu:'Hasil ujian'});
+ assert.equal(pupilResults.student.id,studentId);
+ assert.deepEqual(pupilResults.exams.map(e=>e.id),[examId]);
+ assert.equal(pupilResults.attempts[0].id,attemptId);
+ assert(!JSON.stringify(pupilResults).includes('PRIVATE_QUESTION_TEXT'));
+ assert(queryReads.some(row=>row.values[0]==='exam'&&row.query.includes('id IN')));
+ await writeRecord('scoped-future-exam','exam',{...await record(examId),id:'scoped-future-exam',studentIds:[],participantsSelected:false,excludedStudentIds:[]});
+ const pupilSchedules=await read({studentMenu:'Jadwal ujian'});
+ assert(pupilSchedules.exams.some(e=>e.id==='scoped-future-exam'));
+ assert(!(await read({studentMenu:'Hasil ujian'})).exams.some(e=>e.id==='scoped-future-exam'));
+ assert(pupilSchedules.attempts.every(a=>a.score===null));
+ cookie='';
+ assert.equal(policy.submissionDelay(10000,5000,false,0.5),1100);
+ assert.equal(policy.submissionDelay(10000,7400,false,0.99),100);
+ assert.equal(policy.submissionDelay(10000,9600,false,0.99),0);
+ assert.equal(policy.submissionDelay(10000,10000,true,0.5),1750);
+ console.log('PASS: scoped admin, teacher, and student menus, deferred details, unit access, and deadline-aware submission delay.');
 }
 // Import approval permits warnings and missing keys, with explicit manual grading.
 {
