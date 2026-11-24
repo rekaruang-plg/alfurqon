@@ -11,8 +11,8 @@ function visit(file){
    src="import driver from 'npm:postgres@3.4.7';\n"+src.replace("require('postgres')","driver")
      .replaceAll('process.env.DATABASE_URL',"Deno.env.get('SUPABASE_DB_URL')")
      .replace(/ssl: process\.env\.DATABASE_CA_CERT.*?'verify-full'/,"")
-     .replace('let pool:',"let vault:string|undefined;export async function loadVault(){if(!vault){const [row]=await connection().unsafe(\"select value from cbt.runtime_secrets where name='token-vault'\");if(!/^[a-f0-9]{64}$/.test(row?.value??''))throw Error('Vault unavailable');vault=row.value;}}\nlet pool:")
-     .replace('return process.env.TOKEN_VAULT_KEY','return vault')
+     .replace('let pool:',"let vault:Promise<string>|undefined;function loadVault(){return vault??=(async()=>{const [row]=await connection().unsafe(\"select value from cbt.runtime_secrets where name='token-vault'\");if(!/^[a-f0-9]{64}$/.test(row?.value??''))throw Error('Vault unavailable');return row.value;})().catch(error=>{vault=undefined;throw error;});}\nlet pool:")
+     .replace('return process.env.TOKEN_VAULT_KEY','return loadVault()')
      .replace(/process\.env\.(WORD_CONVERTER_\w+)/g,"Deno.env.get('$1')");
  }
  src=src.replace(/process\.env\.VERCEL/g,"'1'");

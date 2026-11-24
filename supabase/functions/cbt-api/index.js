@@ -2,7 +2,6 @@
 import {GET as readCBT, POST as writeCBT} from '../../../app/api/cbt/route.ts';
 import {POST as authenticate} from '../../../app/api/auth/route.ts';
 import {POST as convert} from '../../../app/api/word-convert/route.ts';
-import {loadVault} from '../../../lib/production-db.ts';
 const routes={auth:{POST:authenticate},cbt:{GET:readCBT,POST:writeCBT},'word-convert':{POST:convert}};
 Deno.serve(async req=>{
  const name=new URL(req.url).pathname.split('/').at(-1);
@@ -20,7 +19,6 @@ Deno.serve(async req=>{
    headers.delete('x-vercel-forwarded-for');
    // Use the gateway's network information, never a caller-provided Vercel header.
    headers.set('x-vercel-forwarded-for',req.headers.get('cf-connecting-ip')||'gateway');
-   if(name==='cbt'&&!(req.method==='GET'&&internal.searchParams.get('entry')==='1'))await loadVault();
    const response=await fn(new Request(internal,{method:req.method,headers,body:req.method==='POST'?req.body:null}));
    const out=new Headers({'Cache-Control':'private, no-store','Content-Type':response.headers.get('content-type')||'application/json'});
    const cookies=response.headers.getSetCookie();

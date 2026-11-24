@@ -560,6 +560,18 @@ for(const unit of ['SD','SMP','SMA']){
 }
 user={email:'r6-proctor@test.invalid',displayName:'Pengawas SD'};
 const ps=await state(period);assert.equal(ps.exams.length,1);assert(ps.exams[0].canMonitor&&ps.exams[0].canProctor&&!ps.exams[0].canGrade);
+queryReads=[];
+const lightResponse=await routes.GET(new Request('https://cbt.test/api/cbt?view=operations&year=2044%2F2045'));
+assert.equal(lightResponse.status,200);
+const light=await lightResponse.json();
+assert.equal(light.operations,true);
+assert.deepEqual(light.exams.map(e=>e.id),ps.exams.map(e=>e.id));
+assert.deepEqual(light.exams.map(e=>e.canProctor),ps.exams.map(e=>e.canProctor));
+assert(light.banks.length>0&&light.banks.every(bank=>bank.unit==='SD'&&!('questions' in bank)));
+assert(queryReads.some(read=>read.values[0]==='bank'&&read.query.includes("json_remove(data,'$.questions')")));
+assert(queryReads.every(read=>!['snapshot','draft','audit'].includes(read.values[0])));
+assert(queryReads.some(read=>read.query.includes("json_extract(data,'$.status') AS status")&&read.query.includes('FROM attempts')));
+
 const makeup6=await call('makeup',{period,examId:'r6-exam-sd',studentId:'r6-pupil-sd',reason:'Siswa datang setelah ujian pertama selesai',start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()});assert(makeup6.examId);assert(makeup6.token);
 console.log('PASS: Rev6 super admin sees three units, each unit admin only its unit, cross-unit retake/token denied, proctor only assigned class and can create reasoned follow-up without grading access.');
 }
