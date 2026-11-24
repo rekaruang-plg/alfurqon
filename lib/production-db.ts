@@ -18,7 +18,7 @@ function postgresQuery(source: string) {
   if (/^INSERT OR IGNORE INTO /.test(q)) q=q.replace('INSERT OR IGNORE','INSERT')+' ON CONFLICT DO NOTHING';
   q=q.replace(/json_remove\(data,('\$\.[a-zA-Z]+'(?:,'\$\.[a-zA-Z]+')*)\)/g,(_match,paths:string)=>
     "(data::jsonb - ARRAY["+paths.replaceAll("$.","")+"])::text")
-    .replace(/json_extract\(data,'\$\.(status|unit|ownerId|simulation|className|at|graded|published|correctedAt|deadline|pausedAt|securityLocked)'\)/g,"(data::jsonb ->> '$1')")
+    .replace(/json_extract\(data,'\$\.(status|unit|ownerId|simulation|className|at|graded|published|correctedAt|deadline|pausedAt|securityLocked|pauseUntil|submittedAt)'\)/g,"(data::jsonb ->> '$1')")
     .replace(" IN (1,'true')"," = 'true'")
     .replace("json_extract(data,'$.form.title')","(data::jsonb #>> '{form,title}')")
     .replace("json_each(records.data,'$.studentIds')","jsonb_array_elements_text(CASE WHEN jsonb_typeof(records.data::jsonb->'studentIds')='array' THEN records.data::jsonb->'studentIds' ELSE '[]'::jsonb END) AS enrollment(value)")
@@ -64,6 +64,7 @@ async function execute(statements: Statement[]) {
 export const env={
   DB:{prepare:(sql:string)=>new Statement(sql),batch:execute},
   get TOKEN_VAULT_KEY(){return process.env.TOKEN_VAULT_KEY},
+  get TEACHER_EXAM_MODE(){return process.env.CBT_TEACHER_EXAM_MODE==='1';},
   get WORD_CONVERTER_URL(){return process.env.WORD_CONVERTER_URL},
   get WORD_CONVERTER_TOKEN(){return process.env.WORD_CONVERTER_TOKEN}
 };

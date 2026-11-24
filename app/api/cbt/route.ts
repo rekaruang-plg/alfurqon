@@ -1,4 +1,5 @@
 import {sameOrigin} from '../../../lib/request-origin';
+import {teacherExamActions,teacherExamMenus,teacherExamModeMessage,teacherExamGrace,teacherExamLead,teacherExamWindow,wibDayStart} from '../../../lib/teacher-exam-mode';
 import {sdSubjectProfiles,smpSubjectProfiles,smaQuestionTypes} from '../../../lib/sd-subject-profiles';
 import {questionTypeLabels} from '../../../lib/question-settings';
 import {generatedAccount} from '../../../lib/generated-account';
@@ -31,6 +32,38 @@ const staffMenuRecords:Record<string,readonly string[]>={
 
 const questionIndexSQL="(SELECT json_group_array(json_object('id',json_extract(value,'$.id'),'sourceId',json_extract(value,'$.sourceId'),'type',json_extract(value,'$.type'),'scope',json_extract(value,'$.scope'))) FROM json_each(records.data,'$.questions'))";
 
+async function currentTeacherExamMode(staff:any){
+ if(staff?.role!=='Guru'||staff.demo||!env.TEACHER_EXAM_MODE)return null;
+ const now=Date.now();
+ const today=wibDayStart(now);
+ const day=24*60*60_000;
+ const {results}=await env.DB.prepare("SELECT id,json_remove(data,'$.instructions','$.studentIds','$.excludedStudentIds') AS data FROM records WHERE kind=? AND json_extract(data,'$.unit')=?").bind('exam',staff.unit).all();
+ const exams=results.map((row:any)=>({...JSON.parse(row.data),id:row.id}))
+   .filter((exam:any)=>exam.status==='Aktif'&&!exam.deletedAt&&!exam.simulation&&typeof exam.start==='string'&&typeof exam.end==='string')
+   .filter((exam:any)=>Date.parse(exam.start)<=now+day+teacherExamLead&&Date.parse(exam.end)>=today-day)
+   .map((exam:any)=>({...exam,proctor:(exam.duties||[]).some((d:any)=>d.staffId===staff.id&&d.role==='proctor')}));
+ const official=new Map<string,number>();
+ const needsExtensionCheck=exams.filter((exam:any)=>Date.parse(exam.start)<=now&&Date.parse(exam.end)<=now+teacherExamGrace);
+ for(let offset=0;offset<needsExtensionCheck.length;offset+=100){
+   const batch=needsExtensionCheck.slice(offset,offset+100);
+   const {results:attempts}=await env.DB.prepare(
+     "SELECT exam_id,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.pauseUntil') AS pause_until,json_extract(data,'$.submittedAt') AS submitted_at FROM attempts WHERE exam_id IN ("+batch.map(()=>'?').join(',')+") AND CAST(json_extract(data,'$.deadline') AS BIGINT)+COALESCE(CAST(json_extract(data,'$.pauseUntil') AS BIGINT)-CAST(json_extract(data,'$.pausedAt') AS BIGINT),0)>=?"
+   ).bind(...batch.map((e:any)=>e.id),now-teacherExamGrace).all();
+   for(const row of attempts){
+     const deadline=Number(row.deadline);
+     if(!Number.isFinite(deadline)||deadline<=0)continue;
+     const pause=Number(row.pause_until)&&Number(row.paused_at)?Math.max(0,Number(row.pause_until)-Number(row.paused_at)):0;
+     const end=Number(row.submitted_at)?Math.min(deadline+pause,Number(row.submitted_at)):deadline+pause;
+     official.set(row.exam_id,Math.max(official.get(row.exam_id)||0,end));
+   }
+ }
+ return teacherExamWindow(exams.map((exam:any)=>({...exam,effectiveEnd:official.get(exam.id)})),now);
+}
+
+function lockedTeacherMenu(teacherExamMode:NonNullable<Awaited<ReturnType<typeof currentTeacherExamMode>>>){
+ return Response.json({error:teacherExamModeMessage,teacherExamMode},{status:423,headers:{'Cache-Control':'no-store'}});
+}
+
 async function handlers(req:Request){
 let requestBody:any=null;
 if(req.method==='POST'){
@@ -56,7 +89,9 @@ const query=new URL(req.url).searchParams;
 const activeYear=(await rawGet('active-year'))?.name||'2026/2027';
 
 const activePeriodOnly=req.method==='GET'&&query.get('activePeriod')==='1';
-if(activePeriodOnly&&identity?.staff)return {GET:async()=>Response.json({activeYear},{headers:{'Cache-Control':'no-store'}}),POST};
+if(activePeriodOnly&&identity?.staff)return {GET:async()=>Response.json({
+ activeYear,teacherExamMode:await currentTeacherExamMode(identity.staff),
+},{headers:{'Cache-Control':'no-store'}}),POST};
 const period={year:String(requestBody?.period?.year||query.get('year')||activeYear),semester:Number(requestBody?.period?.semester||query.get('semester')||1)};
 if(!/^\d{4}\/\d{4}$/.test(period.year)||![1,2].includes(period.semester))fail('Periode tidak valid.');
 // Normalize legacy duplicate class labels without deleting exam history.
@@ -411,9 +446,9 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
 async function readStaffMenuDetail(staff:any,kind:string,key:string){
  const headers={'Cache-Control':'no-store'};
  const missing=()=>Response.json({error:'Detail tidak tersedia pada unit atau periode ini.'},{status:404,headers});
- if(kind==='bank'){
+ if(kind==='bank'||kind==='simulation'){
    const bank=await get(key);
-   if(!bank||bank._kind!=='bank'||bank.deletedAt&&!bank.retainQuestions||!staffDataScope(staff,bank))return missing();
+   if(!bank||bank._kind!=='bank'||bank.deletedAt&&!bank.retainQuestions||!staffDataScope(staff,bank)||kind==='simulation'&&!bank.simulation)return missing();
    return Response.json({...bank,archived:!!bank.deletedAt},{headers});
  }
  if(kind==='draft'){
@@ -456,8 +491,13 @@ async function GET(req:Request){try{
  const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'');
  if(staff.role==='Siswa')return await studentOverview(staff.studentId,query.get('studentMenu'));
  const staffScope=(!demo||query.get('menuVersion')==='2')&&['Super Admin','Admin Unit','Guru'].includes(staff.role);
- if(staffScope&&query.has('detail'))return await readStaffMenuDetail(staff,query.get('detail')||'',query.get('id')||'');
  const menu=query.get('menu');
+ const detail=query.get('detail');
+ if(staff.role==='Guru'&&(menu&&teacherExamMenus.includes(menu)||detail&&['bank','grade','gradeExam'].includes(detail)||!menu&&!detail&&query.get('view')!=='operations')){
+   const mode=await currentTeacherExamMode(staff);
+   if(mode)return lockedTeacherMenu(mode);
+ }
+ if(staffScope&&detail)return await readStaffMenuDetail(staff,detail,query.get('id')||'');
  if(staffScope&&menu&&Object.hasOwn(staffMenuRecords,menu)&&!staffMenuRecords[menu].includes('subject')){
    await ensureMasters();
    return await readStaffMenu(staff,menu,user,authMethod);
@@ -567,6 +607,10 @@ if(b.action==='setup'){
  const bankId=await put('bank',{title:'Paket Simulasi Matematika',subject:'Matematika',unit:'SD',questions:starterQuestions});await put('exam',{title:'Simulasi Ujian Akhir',subject:'Matematika',unit:'SD',className:'6A',bankId,duration:60,start:new Date().toISOString(),end:new Date(Date.now()+7*86400000).toISOString(),status:'Aktif'});for(const name of ['Ahmad Fauzan','Aisyah Zahra','Muhammad Rayyan','Fatimah Az-Zahra'])await put('student',{name,unit:'SD',className:'6A',nis:'SIM-'+id().slice(0,6),accountId:null});await ensureCatalog();return Response.json({ok:true});
 }
 if(!staff||staff.disabled)fail('Akun belum diberi akses.');
+if(staff.role==='Guru'&&teacherExamActions.includes(b.action)){
+ const mode=await currentTeacherExamMode(staff);
+ if(mode)return lockedTeacherMenu(mode);
+}
 if(staff.role==='Siswa'){
  if(b.action!=='studentLaunch')fail('Akses siswa hanya untuk ujian sendiri.');const e=await get(b.examId);if(!e||e._kind!=='exam'||e.deletedAt)fail('Ujian tidak ditemukan.');if(!(await participants(e)).some((s:any)=>s.id===staff.studentId))fail('Anda bukan peserta ujian ini.');
  const resumeRow:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(staff.studentId,e.id).first();const resumed=resumeRow?{...JSON.parse(resumeRow.data),version:resumeRow.version}:null;const canResume=resumed?.status==='Mengerjakan'&&(resumed.pausedAt||resumed.deadline>Date.now());const shared=await get('shared-'+e.id);if(shared){if(await hash(String(b.code||'').trim().toUpperCase())!==await hash(await sharedToken(e)))fail('Token ujian tidak sesuai. Minta token terbaru kepada pengawas.');if(!canResume&&(e.status!=='Aktif'||Date.now()<Date.parse(e.start)||Date.now()>=Date.parse(e.end)))fail('Jadwal ujian belum dimulai atau sudah berakhir.');}
@@ -734,7 +778,8 @@ async function readEntry(req:Request){
    const installed=await env.DB.prepare('SELECT id FROM records WHERE id=?').bind('installation').first();
    return Response.json({needsSetup:!installed,user:account.user},{headers});
  }
- return Response.json({entry:{name:staff.name,role:staff.role,authMethod:account.authMethod}},{headers});
+ const teacherExamMode=await currentTeacherExamMode(staff);
+ return Response.json({entry:{name:staff.name,role:staff.role,authMethod:account.authMethod,...(teacherExamMode?{teacherExamMode}:{})}},{headers});
 }
 export async function GET(req:Request){try{if(new URL(req.url).searchParams.get('entry')==='1')return await readEntry(req);return await (await handlers(req)).GET(req)}catch{return Response.json({error:"Tidak dapat memuat data."},{status:400})}}
 export async function POST(req:Request){try{return await (await handlers(req)).POST(req)}catch{return Response.json({error:"Permintaan tidak valid."},{status:400})}}

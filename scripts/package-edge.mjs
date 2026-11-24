@@ -13,6 +13,7 @@ function visit(file){
      .replace(/ssl: process\.env\.DATABASE_CA_CERT.*?'verify-full'/,"")
      .replace('let pool:',"let vault:Promise<string>|undefined;function loadVault(){return vault??=(async()=>{const [row]=await connection().unsafe(\"select value from cbt.runtime_secrets where name='token-vault'\");if(!/^[a-f0-9]{64}$/.test(row?.value??''))throw Error('Vault unavailable');return row.value;})().catch(error=>{vault=undefined;throw error;});}\nlet pool:")
      .replace('return process.env.TOKEN_VAULT_KEY','return loadVault()')
+     .replace("process.env.CBT_TEACHER_EXAM_MODE==='1'","true")
      .replace(/process\.env\.(WORD_CONVERTER_\w+)/g,"Deno.env.get('$1')");
  }
  src=src.replace(/process\.env\.VERCEL/g,"'1'");

@@ -11,6 +11,8 @@ let user={userId:'owner',email:'qa@example.test',displayName:'QA Admin',fullName
 function evaluate(source,vars){const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;const box={exports:{},crypto,Response,Request,URL,TextEncoder,TextDecoder,Date,console,...vars};vm.runInNewContext(js,box);return box.exports}
 const strip=s=>s.replace(/^import .*;\n/gm,'');
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
+const examMode=evaluate(fs.readFileSync('lib/teacher-exam-mode.ts','utf8'),{});
+let teacherModeEnabled=false;
 const settings=evaluate(fs.readFileSync('lib/question-settings.ts','utf8'),{});
 const sdProfiles=evaluate(strip(fs.readFileSync('lib/sd-subject-profiles.ts','utf8')),settings);
 const model=evaluate(strip(fs.readFileSync('lib/model.ts','utf8')),policy);
@@ -26,7 +28,7 @@ const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
-const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32)},actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
+const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
 async function seedYearSubjects(year){for(const unit of ['SD','SMP','SMA'])for(const name of simulation.subjectCatalog[unit]||[])await call('saveSubject',{period:{year,semester:1},data:{name,unit,grades:unit==='SD'?['5','6']:['1','2','3']}});}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
@@ -825,4 +827,54 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  assert.equal((await monitor()).status,403);
  console.log('PASS: 1,000 monitoring summaries without question payloads or bank reads; out-of-unit access denied.');
 
+}
+
+{
+ const date=time=>Date.parse('2026-11-24T'+time+':00+07:00');
+ const morning={start:new Date(date('08:00')).toISOString(),end:new Date(date('09:00')).toISOString(),proctor:false};
+ const afternoon={start:new Date(date('11:30')).toISOString(),end:new Date(date('12:30')).toISOString(),proctor:true};
+ assert.equal(examMode.teacherExamWindow([morning,afternoon],date('07:29')),null);
+ assert.equal(examMode.teacherExamWindow([morning,afternoon],date('07:30')).until,date('12:45'));
+ assert.equal(examMode.teacherExamWindow([morning,afternoon],date('10:00')).home,'Jadwal ujian');
+ assert.equal(examMode.teacherExamWindow([morning,afternoon],date('11:00')).home,'Token ujian');
+ assert.equal(examMode.teacherExamWindow([morning,afternoon],date('12:45')),null);
+ assert.equal(examMode.teacherExamWindow([morning,{...afternoon,effectiveEnd:date('13:00')}],date('12:46')).until,date('13:15'));
+ const now=Date.now(),unit='MODE-QA',teacher='mode-qa-teacher',id='mode-qa-exam';
+ await writeRecord(teacher,'staff',{name:'Pengawas Mode QA',role:'Guru',email:'mode-qa-teacher@test.invalid',unit,assignments:[]});
+ await writeRecord('mode-qa-other','staff',{name:'Guru Mode QA',role:'Guru',email:'mode-qa-other@test.invalid',unit,assignments:[]});
+ await writeRecord('mode-qa-admin','staff',{name:'Admin Mode QA',role:'Admin Unit',email:'mode-qa-admin@test.invalid',unit});
+ const schedule={unit,start:new Date(now+10*60000).toISOString(),end:new Date(now+60*60000).toISOString(),status:'Aktif',duties:[{staffId:teacher,role:'proctor'}]};
+ await writeRecord(id,'exam',schedule);
+ const modeRead=async (query,status=200)=>{
+   const response=await routes.GET(new Request('https://cbt.test/api/cbt?'+query));
+   const result=await response.json();
+   assert.equal(response.status,status,JSON.stringify(result));
+   return result;
+ };
+ teacherModeEnabled=true;
+ cookie='';
+ user={email:'mode-qa-teacher@test.invalid',displayName:'Pengawas Mode QA'};
+ assert.equal((await modeRead('entry=1')).entry.teacherExamMode.home,'Token ujian');
+ assert.equal((await modeRead('activePeriod=1')).teacherExamMode.home,'Token ujian');
+ for(const menu of ['Buat soal','Bank soal','Koreksi & nilai'])await modeRead('menu='+encodeURIComponent(menu),423);
+ await modeRead('menu=Token+ujian');await modeRead('menu=Monitoring');await modeRead('menu=Jadwal+ujian');
+ await modeRead('detail=bank&id=any-package',423);
+ await modeRead('detail=gradeExam&id=any-exam',423);
+ await call('saveBank',{data:{}},423);
+ const draft=await call('saveDraft',{data:{title:'Draf saat ujian',questions:[]}});
+ assert.equal((await modeRead('detail=draft&id='+draft.id)).title,'Draf saat ujian');
+ user={email:'mode-qa-other@test.invalid',displayName:'Guru Mode QA'};
+ assert.equal((await modeRead('entry=1')).entry.teacherExamMode.home,'Jadwal ujian');
+ user={email:'mode-qa-admin@test.invalid',displayName:'Admin Mode QA'};
+ assert.equal((await modeRead('entry=1')).entry.teacherExamMode,undefined);
+ await modeRead('menu=Bank+soal');
+ user={email:'qa@example.test',displayName:'QA Admin'};
+ assert.equal((await modeRead('entry=1')).entry.teacherExamMode,undefined);
+ await modeRead('menu=Koreksi+%26+nilai');
+ user={email:'mode-qa-teacher@test.invalid',displayName:'Pengawas Mode QA'};
+ await writeRecord(id,'exam',{...schedule,simulation:true});
+ assert.equal((await modeRead('entry=1')).entry.teacherExamMode,undefined);
+ await modeRead('menu=Bank+soal');
+ teacherModeEnabled=false;
+ console.log('PASS: teacher-only exam mode follows WIB windows, assigned proctor landing, API locks, drafts, and admin exceptions.');
 }
