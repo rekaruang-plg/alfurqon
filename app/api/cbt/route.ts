@@ -411,6 +411,13 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const teacherClasses=teacher?classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
  const permittedExams=examsVisibleTo(staff,exams,teacherClasses);
  const visibleExams=kinds.includes('exam')?permittedExams:[];
+ const participantClasses=menu==='Buat soal'
+   ?new Set(visibleExams.filter(e=>examPermission(staff,e,'bank')).map(e=>JSON.stringify([e.unit,e.className])))
+   :new Set<string>();
+ const participantStudents=participantClasses.size
+   ?(await all('student')).filter(s=>belongsYear(s)&&scope(s)&&participantClasses.has(JSON.stringify([s.unit,s.className])))
+     .map(({id,name,nis,unit,className,year})=>({id,name,nis,unit,className,year}))
+   :[];
  const banks=bankRows.map((row:any)=>({...JSON.parse(row.summary),id:row.id,version:row.version,questions:JSON.parse(row.question_index||'[]'),summaryOnly:true}))
    .map((b:any)=>({...b,canPreviewPackage:canPreviewBank(staff,b,permittedExams)}))
    .filter((b:any)=>scope(b)&&(!b.deletedAt||b.retainQuestions))
@@ -444,7 +451,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    catalogReady:!demo||!!(await get('catalog-v2')),
    navigation:teacher?{token:permittedExams.some(e=>examPermission(staff,e,'token')),monitor:permittedExams.some(e=>examPermission(staff,e,'monitor'))}:undefined,
    classes:visibleClasses.filter(belongsYear),
-   students:students.filter(belongsYear).filter((x:any)=>!teacher||teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),
+   students:menu==='Buat soal'?participantStudents:students.filter(belongsYear).filter((x:any)=>!teacher||teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),
    staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p):menu==='Pengelola')
      .map((p:any)=>teacher?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),
    subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts,

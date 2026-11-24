@@ -627,6 +627,7 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  };
  const bankId='r6-bank-sd',examId='scoped-exam-sd',studentId='r6-pupil-sd';
  await writeRecord(examId,'exam',{...await record('r6-exam-sd'),id:examId,bankId});
+ await writeRecord('scoped-unrelated-student','student',{name:'Other class',unit:'SD',className:'UNSCHEDULED',year:period.year,nis:'QA-OTHER'});
  const question={id:'scoped-question',sourceId:'original-source',type:'PG',scope:'Lingkup QA',text:'PRIVATE_QUESTION_TEXT',key:'0',options:['a','b'],points:10,images:['data:image/png;base64,AAAA']};
  await writeRecord(bankId,'bank',{title:'Scoped image package',unit:'SD',subject:'Matematika',year:period.year,semester:1,questions:[question]});
  await writeRecord('snapshot-'+examId,'snapshot',{questions:[question]});
@@ -651,6 +652,8 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert(bank.exams.find(e=>e.id===examId).questionSources.includes(question.sourceId));
  assert.equal((await read({detail:'bank',id:bankId})).questions[0].text,question.text);
  const draftIndex=await read({menu:'Buat soal'});
+ assert(draftIndex.students.some(student=>student.id===studentId&&student.name&&student.nis));
+ assert(!draftIndex.students.some(student=>student.id==='scoped-unrelated-student'));
  assert.equal(draftIndex.drafts.find(d=>d.id==='scoped-draft').form.title,'Draf tersimpan');
  assert.equal((await read({detail:'draft',id:'scoped-draft'})).questions[0].text,question.text);
  const gradeIndex=await read({menu:'Koreksi & nilai'});
@@ -665,6 +668,9 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert.equal(grade.questions[0].text,question.text);
  assert(!('sessionHash' in grade));
  user={email:'r6-admin-smp@test.invalid',displayName:'Admin SMP'};
+ const smpParticipants=(await read({menu:'Buat soal'})).students;
+ assert(smpParticipants.some(student=>student.id==='r6-pupil-smp'));
+ assert(smpParticipants.every(student=>student.unit==='SMP'));
  const limited=await read({menu:'Bank soal'});
  assert(limited.banks.length>0&&limited.banks.every(b=>b.unit==='SMP'));
  await read({detail:'bank',id:bankId},404);
