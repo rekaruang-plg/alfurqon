@@ -164,7 +164,19 @@ user={email:'admin@example.test',displayName:'Admin SMP'};await call('viewShared
 user={email:wali.email,displayName:wali.name};assert.equal((await call('viewShared',{examId:revExam.id})).token,shared2.token);const proctorState=await state();const protectedAttempt=proctorState.attempts.find(a=>a.examId===revExam.id);assert(!protectedAttempt.questions&&!protectedAttempt.grades);assert(proctorState.students.some(s=>s.className==='6R'));await call('grade',{id:protectedAttempt.id,grades:{cx:30}},400);
 user={email:'qa@example.test',displayName:'QA Admin'};const revCards=(await call('accountCards',{kind:'student',className:'6R'})).cards;
 async function loginCard(c){const r=await authRoutes.POST(new Request('https://cbt.test/api/auth',{method:'POST',headers:{origin:'https://cbt.test'},body:JSON.stringify({action:'login',username:c.username,password:c.password})}));assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];}
-await loginCard(revCards[0]);await call('studentLaunch',{examId:revExam.id,code:shared1.token},400);await call('studentLaunch',{examId:revExam.id,code:'WRONG'},400);const private1=(await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token;const started1=await call('enter',{token:private1});
+await loginCard(revCards[0]);await call('studentLaunch',{examId:revExam.id,code:shared1.token},400);await call('studentLaunch',{examId:revExam.id,code:'WRONG'},400);queryReads=[];
+const private1=(await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token;
+assert(!queryReads.some(read=>['student','student_year','academic_profile'].includes(read.values[0])),'Student launch must not load the roster');
+const launchPupil=(await state()).student;
+const originalLaunchExam=await record(revExam.id);
+await writeRecord(revExam.id,'exam',{...originalLaunchExam,participantsSelected:true,studentIds:[launchPupil.id]});
+assert.equal((await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token,private1);
+await writeRecord(revExam.id,'exam',{...originalLaunchExam,participantsSelected:true,studentIds:[]});
+assert.match((await call('studentLaunch',{examId:revExam.id,code:shared2.token},400)).error,/bukan peserta/);
+await writeRecord(revExam.id,'exam',{...originalLaunchExam,participantsSelected:true,studentIds:[launchPupil.id],excludedStudentIds:[launchPupil.id]});
+assert.match((await call('studentLaunch',{examId:revExam.id,code:shared2.token},400)).error,/bukan peserta/);
+await writeRecord(revExam.id,'exam',originalLaunchExam);
+const started1=await call('enter',{token:private1});
 await call('saveAnswers',{token:private1,answers:{cx:'0,1'},flags:['cx','unknown']});
 const compactSave=await call('saveAnswers',{token:private1,answers:{cx:'0,1,2'}});
 assert.equal(compactSave.compact,true);assert.equal(compactSave.id,started1.id);
@@ -833,6 +845,8 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  assert.equal(progress.attempts.length,1000);
  assert(progress.attempts.every(a=>a.answeredCount===2&&a.questionCount===2&&a.status==='Dikumpulkan'&&!('answers' in a)&&!('questions' in a)));
  assert(queryReads.every(read=>!['bank','snapshot','draft','audit'].includes(read.values[0])));
+const monitorRead=queryReads.find(read=>read.query.includes(' AS answered_count')&&read.values[0]===examId);
+assert(monitorRead&&monitorRead.query.includes("'$.answers'"),'Monitoring counts answers while projecting them out');
  const outsideMonitor={username:'monitor-outside-qa',password:'monitor-outside-test-only'};
  const outsideMonitorId='monitor-outside-staff';
  await writeRecord(outsideMonitorId,'staff',{role:'Admin Unit',unit:'SD',name:'QA Monitoring'});

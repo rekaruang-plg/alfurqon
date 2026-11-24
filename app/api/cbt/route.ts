@@ -130,7 +130,23 @@ function examPermission(who:any,e:any,action:string){if(who.role==='Super Admin'
 function requireExam(who:any,e:any,action:string){if(!examPermission(who,e,action))fail('Jadwal di luar kewenangan Anda.');}
 async function studentsFor(e:any){const year=e.year||'2026/2027';if(Number(e.semester||1)!==2)return (await annualList((await rawAll('student')).filter((s:any)=>!s.semester2Only),'student',year)).filter((x:any)=>!x.deletedAt);return (await rawAll('academic_profile')).filter((s:any)=>s.profileKind==='student'&&s.profileYear===year).map((s:any)=>({...s,id:s.id.slice(('semester2:'+year+':').length)}));}
 async function studentFor(id:string,e:any){if(Number(e.semester||1)===2){const profile=await rawGet('semester2:'+(e.year||'2026/2027')+':'+id);if(profile)return {...profile,id};}const raw=await rawGet(id);return raw?await annual(raw,'student',e.year||'2026/2027'):null;}
-async function participants(e:any){return (await studentsFor(e)).filter((s:any)=>!(e.excludedStudentIds||[]).includes(s.id)).filter((s:any)=>(e.participantsSelected||e.studentIds?.length)?e.studentIds?.includes(s.id):s.unit===e.unit&&s.className===e.className&&(s.year||'2026/2027')===(e.year||'2026/2027'));}
+function matchesEnrollment(student:any,exam:any){
+ if((exam.excludedStudentIds||[]).includes(student.id))return false;
+ if(exam.participantsSelected||exam.studentIds?.length)return !!exam.studentIds?.includes(student.id);
+ return student.unit===exam.unit&&student.className===exam.className&&(student.year||'2026/2027')===(exam.year||'2026/2027');
+}
+async function participants(e:any){return (await studentsFor(e)).filter((student:any)=>matchesEnrollment(student,e));}
+async function isExamParticipant(studentId:string,exam:any){
+ const year=exam.year||'2026/2027';
+ if(Number(exam.semester||1)===2){
+   const profile=await rawGet('semester2:'+year+':'+studentId);
+   return !!profile&&!profile.deletedAt&&profile._kind==='academic_profile'&&profile.profileKind==='student'&&profile.profileYear===year&&matchesEnrollment({...profile,id:studentId},exam);
+ }
+ const base=await rawGet(studentId);
+ if(!base||base._kind!=='student'||base.deletedAt||base.semester2Only)return false;
+ const student=await annual(base,'student',year);
+ return !student.deletedAt&&matchesEnrollment(student,exam);
+}
 async function sharedToken(e:any,rotate=false){let v=await get('shared-'+e.id);if(rotate||!v||!v.rotationVersion){const token=(demo?'DEMO-':'')+Array.from(crypto.getRandomValues(new Uint8Array(10))).map(n=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[n%32]).join('');const vault=await sealToken(token,e.id,await env.TOKEN_VAULT_KEY);await put('shared_token',{rotationVersion:1,issuedSlot:Math.floor(Date.now()/900000),id:'shared-'+e.id,...(v?{version:v.version}:{}),vault,hash:await hash(token)});v=await get('shared-'+e.id);}if(v.issuedSlot!==undefined&&v.issuedSlot!==Math.floor(Date.now()/900000))fail('Token sudah kedaluwarsa. Minta pengawas generate kembali.');const seed=await openToken(v.vault,e.id,await env.TOKEN_VAULT_KEY);const slot=Math.floor(Date.now()/900000);const digest=await hash(seed+':'+e.id+':'+slot);return (demo?'DEMO-':'')+Array.from({length:5},(_,i)=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[parseInt(digest.slice(i*2,i*2+2),16)%32]).join('');}
 async function roster(e:any){const pupils=await participants(e);if(!pupils.length)fail('Tidak ada peserta yang dipilih untuk ujian ini.');await freezeExam(e);for(const st of pupils){const row:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(st.id,e.id).first();if(row){const a={...JSON.parse(row.data),version:row.version};if(a.status==='Belum mulai'&&!a.requiresLogin){a.requiresLogin=true;await saveAttempt(a);}continue;}await issueToken({id:id(),studentId:st.id,examId:e.id,status:'Belum mulai',answers:{},published:false,requiresLogin:true});}}
 async function validateClass(unit:string,name:string,year:string){if(!(await all('class')).some((c:any)=>c.unit===unit&&c.name.trim().toLowerCase()===name.trim().toLowerCase()&&c.year===year))fail('Pilih kelas dan tahun ajaran dari data master.');}
@@ -321,7 +337,7 @@ async function monitoringProgress(staff:any,examId:string){
    return Response.json({error:'Jadwal tidak tersedia untuk monitoring.'},{status:403});
  }
  const {results}=await db().prepare(
-   "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder') AS summary,json_array_length(data,'$.questions') AS question_count FROM attempts WHERE exam_id=?"
+   "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,json_array_length(data,'$.questions') AS question_count,(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'') AS answered_count FROM attempts WHERE exam_id=?"
  ).bind(exam.id).all();
  const now=Date.now();
  const attempts=results.map((row:any)=>{
@@ -346,7 +362,7 @@ async function monitoringProgress(staff:any,examId:string){
    }
    return {id:row.id,examId:row.exam_id,studentId:row.student_id,status,timedOut,submittedAt,
      pausedAt,securityLocked,exitReason,resetCount:attempt.resetCount||0,actionNotes:attempt.actionNotes,
-     answeredCount:Object.values(attempt.answers||{}).filter(Boolean).length,questionCount:Number(row.question_count)||0};
+     answeredCount:Number(row.answered_count)||0,questionCount:Number(row.question_count)||0};
  });
  return Response.json({examId,attempts},{headers:{'Cache-Control':'no-store'}});
 }
@@ -649,7 +665,7 @@ if(staff.role==='Guru'&&teacherExamActions.includes(b.action)){
  if(mode)return lockedTeacherMenu(mode);
 }
 if(staff.role==='Siswa'){
- if(b.action!=='studentLaunch')fail('Akses siswa hanya untuk ujian sendiri.');const e=await get(b.examId);if(!e||e._kind!=='exam'||e.deletedAt)fail('Ujian tidak ditemukan.');if(!(await participants(e)).some((s:any)=>s.id===staff.studentId))fail('Anda bukan peserta ujian ini.');
+ if(b.action!=='studentLaunch')fail('Akses siswa hanya untuk ujian sendiri.');const e=await get(b.examId);if(!e||e._kind!=='exam'||e.deletedAt)fail('Ujian tidak ditemukan.');if(!await isExamParticipant(staff.studentId,e))fail('Anda bukan peserta ujian ini.');
  const resumeRow:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(staff.studentId,e.id).first();const resumed=resumeRow?{...JSON.parse(resumeRow.data),version:resumeRow.version}:null;const canResume=resumed?.status==='Mengerjakan'&&(resumed.pausedAt||resumed.deadline>Date.now());const shared=await get('shared-'+e.id);if(shared){if(await hash(String(b.code||'').trim().toUpperCase())!==await hash(await sharedToken(e)))fail('Token ujian tidak sesuai. Minta token terbaru kepada pengawas.');if(!canResume&&(e.status!=='Aktif'||Date.now()<Date.parse(e.start)||Date.now()>=Date.parse(e.end)))fail('Jadwal ujian belum dimulai atau sudah berakhir.');}
  else if(e.tokenMode==='shared')fail('Pengawas belum menyiapkan token ujian.');
  if(resumed){await settleAttempt(resumed);if(resumed.status==='Dikumpulkan'&&!resumed.published)fail('Ujian sudah selesai dan jawaban telah dikumpulkan.');}
