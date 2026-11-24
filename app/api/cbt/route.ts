@@ -385,7 +385,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
  const [years,students,exams,classes,people,subjects,topics,logs,sharedRows,bankRows,draftRows,loginAccounts]=await Promise.all([
    all('year'),list('student'),teacher?all('exam'):list('exam'),list('class'),list('staff'),list('subject'),list('topic'),
-   menu==='Riwayat aktivitas'?db().prepare("SELECT data FROM records WHERE kind=?"+(staff.role==='Admin Unit'?" AND json_extract(data,'$.unit')=?":"")+" ORDER BY CAST(json_extract(data,'$.at') AS BIGINT) DESC LIMIT 50").bind(...(staff.role==='Admin Unit'?['audit',staff.unit]:['audit'])).all().then(r=>r.results.map((row:any)=>JSON.parse(row.data))):[],
+   menu==='Riwayat aktivitas'?db().prepare("SELECT data FROM records WHERE kind=?"+(staff.role==='Admin Unit'?" AND json_extract(data,'$.unit')=?":"")+" ORDER BY json_extract(data,'$.at') DESC,id DESC LIMIT 50").bind(...(staff.role==='Admin Unit'?['audit',staff.unit]:['audit'])).all().then(r=>r.results.map((row:any)=>JSON.parse(row.data))):[],
    needsShared?all('shared_token'):[],
    bankMenu?db().prepare("SELECT id,version,json_remove(data,'$.questions') AS summary,"+questionIndexSQL+" AS question_index FROM records WHERE kind=?"+bankUnitFilter+(menu==='Simulasi ujian'?" AND json_extract(data,'$.simulation') IN (1,'true')":"")).bind('bank',...bankUnits).all().then(r=>r.results):[],
    menu==='Buat soal'?db().prepare("SELECT id,json_remove(data,'$.form') AS summary,json_extract(data,'$.form.title') AS title FROM records WHERE kind=? AND json_extract(data,'$.ownerId')=?").bind('draft',staff.id).all().then(r=>r.results):[],
@@ -538,9 +538,46 @@ async function GET(req:Request){try{
  const safeAttempts=operations?rs:rs.map(({sessionHash,...a}:any)=>{const e=examsById.get(a.examId);if(staff.role==='Guru'&&!examPermission(staff,e,'grade'))return {id:a.id,studentId:a.studentId,examId:a.examId,status:a.status,published:a.published,score:a.published?a.score:null,graded:a.graded,readOnly:true,submittedAt:a.submittedAt,timedOut:a.timedOut,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,securityReason:a.securityReason,pausedAt:a.pausedAt,actionNotes:a.actionNotes,answeredCount:Object.values(a.answers||{}).filter(Boolean).length,questionCount:a.questions?.length||0};return a;});
  return Response.json({demo,operations,period,classes:visibleClasses.filter((c:any)=>c.year===period.year),topics:topics.filter(scope).filter(inPeriod),years:await all('year'),activeYear,authMethod,loginAccounts:staff.role==='Super Admin'&&!demo&&!operations?(await authRecords('credential')).map((c:any)=>({staffId:c.staffId,username:c.username})):[],catalogReady:!!(await get('catalog-v2')),subjects:subjects.filter(scope),user,staff,students:students.filter((s:any)=>(s.year||'2026/2027')===period.year).filter(scope).filter((x:any)=>staff.role!=='Guru'||visibleClasses.some((c:any)=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),exams:examsVisible.map((e:any)=>({...e,tokenExpiresAt:(()=>{const t=sharedRows.find((v:any)=>v.id==='shared-'+e.id);return t?(t.issuedSlot===undefined?Math.floor(Date.now()/900000)+1:t.issuedSlot+1)*900000:0})(),questionSources:(snapshotRows.find((x:any)=>x.id==='snapshot-'+e.id)?.questions||banks.find((b:any)=>b.id===e.bankId)?.questions||[]).map((q:any)=>q.sourceId||q.id),canMonitor:examPermission(staff,e,'monitor'),canManageAttempt:examPermission(staff,e,'monitor'),canProctor:examPermission(staff,e,'token'),canGrade:examPermission(staff,e,'grade'),canWrite:examPermission(staff,e,'bank')})),banks:banks.filter(scope).map((b:any)=>({...b,canPreviewPackage:canPreviewBank(staff,b,examsVisible)})),drafts:(operations?[]:await all('draft')).filter((d:any)=>d.ownerId===staff.id&&inPeriod(d)),staffList:people.filter((x:any)=>x.role!=='Guru'||belongsYear(x)).filter(scope).filter((p:any)=>staff.role==='Super Admin'||p.role==='Guru').map((p:any)=>staff.role==='Guru'?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),attempts:safeAttempts,audit:staff.role==='Guru'?[]:logs.filter(scope).slice(-50).reverse()},{headers:{'Cache-Control':'no-store'}});
  }catch(e:any){return Response.json({error:e.message},{status:401})}}
+async function saveCompactStudentUpdate(b:any){
+ const saving=b.action==='saveAnswers';
+ if(!saving&&(b.action!=='heartbeat'||!b.compact))return null;
+ const staff=identity?.staff;
+ if(staff?.role!=='Siswa'||!staff.studentId||typeof b.token!=='string'||b.token.length<5||b.token.length>80||
+   typeof b.session!=='string'||!/^[a-f0-9-]{36,80}$/.test(b.session))return null;
+ const [tokenHash,sessionHash]=await Promise.all([hash(b.token.trim().toUpperCase()),hash(b.session)]);
+ const idProjection=saving?",(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(attempts.data,'$.questions')) AS question_ids":"";
+ const row:any=await db().prepare("SELECT id,student_id,exam_id,version,json_remove(data,'$.questions','$.answers','$.grades','$.questionOrder','$.flags','$.actionNotes') AS summary"+idProjection+" FROM attempts WHERE token_hash=? AND student_id=?").bind(tokenHash,staff.studentId).first();
+ if(!row)return null;
+ const a=JSON.parse(row.summary);
+ const now=Date.now();
+ if(a.status!=='Mengerjakan'||a.sessionHash!==sessionHash||a.pausedAt||a.pauseUntil||a.securityLocked||
+   !Number.isFinite(a.deadline)||now>=a.deadline||a.strictExit&&now-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS)return null;
+ const exam=await get(row.exam_id);
+ const student=await studentFor(row.student_id,exam||{});
+ if(!exam||exam.deletedAt||!student||student.deletedAt)return null;
+ const savedAt=Date.now();
+ if(savedAt>=a.deadline||a.strictExit&&savedAt-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS)return null;
+ const guards=[row.id,row.version];
+ if(saving){
+   const entries=Object.entries(b.answers||{});
+   const questionIds=new Set<string>(JSON.parse(row.question_ids||'[]'));
+   if(!entries.length||entries.length>questionIds.size||entries.some(([key,value])=>!questionIds.has(key)||typeof value!=='string'||value.length>20000))fail('Jawaban tidak valid.');
+   const delta=JSON.stringify(Object.fromEntries(entries));
+   const flagPatch=Array.isArray(b.flags)?JSON.stringify({flags:b.flags.filter((key:string)=>questionIds.has(key))}):'{}';
+   const saved=await db().prepare("UPDATE attempts SET data=json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?)),version=version+1 WHERE id=? AND version=?").bind(delta,savedAt,savedAt,flagPatch,...guards).run();
+   if(!saved.meta.changes)fail('Jawaban sedang diperbarui. Coba kembali.');
+ }else if(savedAt-a.lastSeenAt>=20000){
+   const saved=await db().prepare("UPDATE attempts SET data=json_set(data,'$.lastSeenAt',?),version=version+1 WHERE id=? AND version=?").bind(savedAt,...guards).run();
+   if(!saved.meta.changes)return null;
+ }
+ return Response.json({compact:true,id:row.id,status:a.status,...(saving?{lastSavedAt:savedAt}:{}),serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
+}
+
 async function handleChildPost(req:Request){return (await handlers(req)).POST(req);}
 async function POST(req:Request){try{const b=requestBody;if(identity?.staff&&b.activeYearAtOpen&&b.activeYearAtOpen!==activeYear)fail('Tahun pelajaran aktif telah berubah. Tutup editor lalu perbarui dashboard.');
 if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock','requestUnlock','heartbeat','tokenDashboard'].includes(b.action)){
+ const compact=await saveCompactStudentUpdate(b);
+ if(compact)return compact;
  const a=await attemptByToken(b.token);const exam=await get(a.examId),student=await studentFor(a.studentId,exam||{});if(identity?.staff?.role==='Siswa'&&(identity.staff.studentId!==a.studentId||!!identity.staff.demo!==demo))fail('Token bukan milik akun siswa ini.');if(!exam||exam.deletedAt||!student||student.deletedAt)fail('Jadwal atau siswa tidak ditemukan.');if(a.requiresLogin&&(!identity?.staff||identity.staff.role!=='Siswa'||identity.staff.studentId!==a.studentId))fail('Masuk dengan akun siswa terlebih dahulu.');
  await settleAttempt(a);
  if(b.action==='preview'){if(a.status==='Belum mulai'&&(exam.status!=='Aktif'||Date.now()<Date.parse(exam.start)||Date.now()>=Date.parse(exam.end)))fail('Ujian belum dibuka atau jadwal sudah berakhir.');return Response.json({id:a.id,student:{name:student.name,nis:student.nis,unit:student.unit,className:student.className},exam:{title:exam.title,subject:exam.subject,duration:exam.duration,start:exam.start,end:exam.end,browserGuard:!exam.simulation,instructions:exam.instructions||'Kerjakan secara mandiri. Hubungi pengawas bila ada kendala.'},status:a.status},{headers:{'Cache-Control':'no-store'}});}

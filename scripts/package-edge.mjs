@@ -9,7 +9,8 @@ function visit(file){
  if(file==='app/chatgpt-auth.ts')src='export async function getChatGPTUser(){return null;}';
  if(file==='lib/production-db.ts'){
    src="import driver from 'npm:postgres@3.4.7';\n"+src.replace("require('postgres')","driver")
-     .replaceAll('process.env.DATABASE_URL',"Deno.env.get('SUPABASE_DB_URL')")
+     .replaceAll('process.env.DATABASE_URL',"(Deno.env.get('CBT_POOLER_URL') || Deno.env.get('SUPABASE_DB_URL'))")
+     .replace('max: 2, prepare: false, idle_timeout: 20','max: 1, prepare: false, idle_timeout: 10')
      .replace(/ssl: process\.env\.DATABASE_CA_CERT.*?'verify-full'/,"")
      .replace('let pool:',"let vault:Promise<string>|undefined;function loadVault(){return vault??=(async()=>{const [row]=await connection().unsafe(\"select value from cbt.runtime_secrets where name='token-vault'\");if(!/^[a-f0-9]{64}$/.test(row?.value??''))throw Error('Vault unavailable');return row.value;})().catch(error=>{vault=undefined;throw error;});}\nlet pool:")
      .replace('return process.env.TOKEN_VAULT_KEY','return loadVault()')

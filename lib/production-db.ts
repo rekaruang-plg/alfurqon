@@ -28,6 +28,9 @@ function postgresQuery(source: string) {
     .replace("json_array_length(data,'$.questions')","jsonb_array_length(data::jsonb -> 'questions')")
     .replace("(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(other.data,'$.questions'))=?","(SELECT jsonb_agg(item->'id' ORDER BY ord) FROM jsonb_array_elements(other.data::jsonb->'questions') WITH ORDINALITY AS items(item,ord))=?::jsonb")
     .replace(/json_extract\(((?:other\.)?data),'\$\.(questionOrder|questions)'\)/g,"($1::jsonb ->> '$2')")
+    .replace("(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(attempts.data,'$.questions'))","(SELECT jsonb_agg(q->'id')::text FROM jsonb_array_elements(NULLIF(attempts.data::jsonb->'questions','null'::jsonb)) AS items(q))")
+    .replace("json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?))","(jsonb_set(data::jsonb,'{answers}',COALESCE(NULLIF(data::jsonb->'answers','null'::jsonb),'{}'::jsonb) || ?::jsonb) || jsonb_build_object('lastSavedAt',?::bigint,'lastSeenAt',?::bigint) || ?::jsonb)::text")
+    .replace("json_set(data,'$.lastSeenAt',?)","(data::jsonb || jsonb_build_object('lastSeenAt',?::bigint))::text")
     .replace("json_set(data,'$.published',json('true'),'$.publishedAt',?)","(data::jsonb || jsonb_build_object('published',true,'publishedAt',?::bigint))::text");
   let index=0;
   return q.replace(/\?/g,()=>'$'+(++index));

@@ -164,7 +164,18 @@ user={email:'admin@example.test',displayName:'Admin SMP'};await call('viewShared
 user={email:wali.email,displayName:wali.name};assert.equal((await call('viewShared',{examId:revExam.id})).token,shared2.token);const proctorState=await state();const protectedAttempt=proctorState.attempts.find(a=>a.examId===revExam.id);assert(!protectedAttempt.questions&&!protectedAttempt.grades);assert(proctorState.students.some(s=>s.className==='6R'));await call('grade',{id:protectedAttempt.id,grades:{cx:30}},400);
 user={email:'qa@example.test',displayName:'QA Admin'};const revCards=(await call('accountCards',{kind:'student',className:'6R'})).cards;
 async function loginCard(c){const r=await authRoutes.POST(new Request('https://cbt.test/api/auth',{method:'POST',headers:{origin:'https://cbt.test'},body:JSON.stringify({action:'login',username:c.username,password:c.password})}));assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];}
-await loginCard(revCards[0]);await call('studentLaunch',{examId:revExam.id,code:shared1.token},400);await call('studentLaunch',{examId:revExam.id,code:'WRONG'},400);const private1=(await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token;const started1=await call('enter',{token:private1});await call('answer',{token:private1,questionId:'cx',value:'0,1,2'});
+await loginCard(revCards[0]);await call('studentLaunch',{examId:revExam.id,code:shared1.token},400);await call('studentLaunch',{examId:revExam.id,code:'WRONG'},400);const private1=(await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token;const started1=await call('enter',{token:private1});
+await call('saveAnswers',{token:private1,answers:{cx:'0,1'},flags:['cx','unknown']});
+const compactSave=await call('saveAnswers',{token:private1,answers:{cx:'0,1,2'}});
+assert.equal(compactSave.compact,true);assert.equal(compactSave.id,started1.id);
+await call('saveAnswers',{token:private1,answers:{unknown:'invalid'}},400);
+await call('saveAnswers',{token:private1,answers:{cx:'invalid-session'},session:'33333333-3333-4333-a333-333333333333'},400);
+const savedBeforeResume=JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(started1.id).data);
+assert.deepEqual(savedBeforeResume.flags,['cx']);assert.equal(savedBeforeResume.answers.cx,'0,1,2');
+assert.equal(savedBeforeResume.questions.length,started1.questions.length);
+const compactPulse=await call('heartbeat',{token:private1,compact:true});
+assert.equal(compactPulse.compact,true);assert.equal(compactPulse.id,started1.id);
+assert.equal(compactPulse.questions,undefined);
 await loginCard(revCards[1]);const private2=(await call('studentLaunch',{examId:revExam.id,code:shared2.token})).token;assert.notEqual(private1,private2);const started2=await call('enter',{token:private2});assert.notEqual(started1.id,started2.id);await call('enter',{token:private1},400);
 cookie='';user=null;await call('enter',{token:private1},400);
 user={email:wali.email,displayName:wali.name};await call('releaseSession',{id:started1.id,reason:'Perpindahan komputer ruang kelas'});let paused=(await state()).attempts.find(a=>a.id===started1.id);assert(paused.pausedAt);assert(paused.actionNotes.some(n=>n.name===wali.name));await call('extraTime',{id:started1.id,minutes:5,reason:'Pemulihan gangguan perangkat'});
@@ -615,6 +626,9 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
    if(!['Bank soal','Buat soal','Simulasi ujian'].includes(menu))assert(queryReads.every(row=>!['bank','snapshot','draft'].includes(row.values[0])),menu);
    if(!['Token ujian','Monitoring','Koreksi & nilai'].includes(menu))assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
  }
+ const activity=await read({menu:'Riwayat aktivitas'});
+ assert(activity.audit.length>0&&activity.audit.length<=50);
+ assert(activity.audit.every((row,i)=>i===0||activity.audit[i-1].at>=row.at));
  const bank=await read({menu:'Bank soal'});
  assert.equal(bank.banks.find(b=>b.id===bankId).questions[0].scope,question.scope);
  assert(bank.exams.find(e=>e.id===examId).questionSources.includes(question.sourceId));
