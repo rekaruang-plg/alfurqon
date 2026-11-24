@@ -36,7 +36,7 @@ const issued=(await call('generate',{examId:exam.id})).issued;assert.equal(issue
 const token=issued[0].token;let a=await call('enter',{token});assert.equal(a.questions.length,4);assert(a.questions.every(q=>!('key' in q)));const order=a.questions.map(q=>q.id).join();const deadline=a.deadline;
 for(const q of bank.questions)await call('answer',{token,questionId:q.id,value:q.type==='PG'?q.key:'48 cm²',flags:[]});
 a=await call('enter',{token});assert.equal(a.questions.map(q=>q.id).join(),order);assert.equal(a.deadline,deadline);assert.equal(Object.keys(a.answers).length,4);assert.equal(a.score,null);
-await call('submit',{token},400);sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(a.id);await call('submit',{token});data=await state();let result=data.attempts.find(r=>r.id===a.id);assert.equal(result.status,'Dikumpulkan');await call('publish',{id:a.id},400);
+await call('submit',{token},400);sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(a.id);const submitted=await call('submit',{token,compact:true});assert.equal(submitted.compact,true);assert.equal(submitted.id,a.id);assert.equal(submitted.status,'Dikumpulkan');assert(!('questions' in submitted)&&!('answers' in submitted));assert.equal((await call('submit',{token,compact:true})).status,'Dikumpulkan');data=await state();let result=data.attempts.find(r=>r.id===a.id);assert.equal(result.status,'Dikumpulkan');await call('publish',{id:a.id},400);
 const grades=Object.fromEntries(result.questions.map(q=>[q.id,q.points]));await call('grade',{id:a.id,grades:{...grades,extra:9999},feedback:'Bagus'});await call('publish',{id:a.id});assert.equal((await call('enter',{token})).score,100);await call('grade',{id:a.id,grades},400);
 await call('saveStaff',{data:{email:'teacher@example.test',name:'Guru',role:'Guru',unit:'SD',subject:'Matematika',permission:'Koreksi saja'}});
 user={...user,email:'teacher@example.test'};await call('saveBank',{data:bank},400);await call('generate',{examId:exam.id},400);
@@ -551,7 +551,16 @@ for(const unit of ['SD','SMP','SMA']){
  await writeRecord('r6-exam-'+suffix,'exam',{title:'Ujian '+unit,topic:'QA',unit,className,subject:'Matematika',year:period.year,semester:1,bankId:'r6-bank-'+suffix,status:'Aktif',start:new Date(Date.now()-10000).toISOString(),end:new Date(Date.now()+3600000).toISOString(),duration:30,duties:unit==='SD'?[{staffId:'r6-proctor',role:'proctor'}]:[]});
 }
 await writeRecord('r6-proctor','staff',{name:'Pengawas SD',email:'r6-proctor@test.invalid',role:'Guru',unit:'SD',year:period.year,assignments:[],subject:''});
-assert.equal((await state(period)).exams.length,3);
+const ownerState=await state(period);
+assert.equal(ownerState.exams.length,3);
+const ownerOperations=await routes.GET(new Request('https://cbt.test/api/cbt?view=operations&year=2044%2F2045'));
+assert.equal(ownerOperations.status,200);
+const ownerLight=await ownerOperations.json();
+assert.equal(ownerLight.operations,true);
+assert(ownerLight.staffList.some(staff=>staff.id==='r6-proctor'));
+for(const key of ['staffList','classes','subjects'])assert.deepEqual(ownerLight[key],ownerState[key]);
+assert(ownerLight.banks.every(bank=>!('questions' in bank)));
+
 for(const unit of ['SD','SMP','SMA']){
  user={email:'r6-admin-'+unit.toLowerCase()+'@test.invalid',displayName:'Admin '+unit};
  const scoped=await state(period);assert.equal(scoped.exams.length,1);assert(scoped.exams[0].canMonitor&&scoped.exams[0].canManageAttempt&&scoped.exams[0].canProctor);

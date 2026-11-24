@@ -346,6 +346,12 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  if(b.action==='exitExam'&&!expired){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}a.exitReason='Keluar dari halaman ujian';}
  if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired&&!disconnected;if(disconnected)a.exitReason=STUDENT_DISCONNECT_REASON;a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}
  }
+ if(b.action==='submit'&&b.compact===true&&a.status==='Dikumpulkan'){
+   return Response.json({
+     compact:true,id:a.id,status:a.status,published:!!a.published,
+     score:a.published?a.score:null,serverNow:Date.now()
+   },{headers:{'Cache-Control':'no-store'}});
+ }
  return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
 }
 
