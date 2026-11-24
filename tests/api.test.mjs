@@ -10,6 +10,11 @@ const DB={prepare:statement,async batch(items){sql.exec('BEGIN');try{const r=[];
 let user={userId:'owner',email:'qa@example.test',displayName:'QA Admin',fullName:null};
 function evaluate(source,vars){const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;const box={exports:{},crypto,Response,Request,URL,TextEncoder,TextDecoder,Date,console,...vars};vm.runInNewContext(js,box);return box.exports}
 const strip=s=>s.replace(/^import .*;\n/gm,'');
+// Postgres.js chooses a serializer from the inferred parameter type. The answer
+// and flag payloads are already JSON strings and must bind as text.
+const {postgresQuery}=evaluate(fs.readFileSync('lib/production-db.ts','utf8')+'\nexport {postgresQuery};',{require:()=>null});
+const compactSaveSQL="UPDATE attempts SET data=json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?)),version=version+1 WHERE id=? AND version=?";
+assert.match(postgresQuery(compactSaveSQL),/\|\| \$1::text::jsonb.*\|\| \$4::text::jsonb/);
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
 const examMode=evaluate(fs.readFileSync('lib/teacher-exam-mode.ts','utf8'),{});
 let teacherModeEnabled=false;
