@@ -20,7 +20,7 @@ Deno.serve(async req=>{
    headers.delete('x-vercel-forwarded-for');
    // Use the gateway's network information, never a caller-provided Vercel header.
    headers.set('x-vercel-forwarded-for',req.headers.get('cf-connecting-ip')||'gateway');
-   if(name==='cbt')await loadVault();
+   if(name==='cbt'&&!(req.method==='GET'&&internal.searchParams.get('entry')==='1'))await loadVault();
    const response=await fn(new Request(internal,{method:req.method,headers,body:req.method==='POST'?req.body:null}));
    const out=new Headers({'Cache-Control':'private, no-store','Content-Type':response.headers.get('content-type')||'application/json'});
    const cookies=response.headers.getSetCookie();

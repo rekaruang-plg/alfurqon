@@ -111,6 +111,13 @@ await call('submit',{token:tk});
 user={email:'teacher@example.test',displayName:'Guru'};await call('grade',{id:attempt.id,grades:{cx:30,written1:15}});assert.equal((await state()).attempts.find(a=>a.id===attempt.id).grades.cx,30);await call('publish',{id:attempt.id});
 // Actual password login routes and cookie identity: only own history, no staff access.
 const login=await authRoutes.POST(new Request('https://cbt.test/api/auth',{method:'POST',headers:{origin:'https://cbt.test'},body:JSON.stringify({action:'login',username:card.username,password:card.password})}));assert.equal(login.status,200,JSON.stringify(await login.clone().json()));cookie=login.headers.get('set-cookie').split(';')[0];
+const readEntry=(headers={cookie})=>routes.GET(new Request('https://cbt.test/api/cbt?entry=1',{headers}));
+queryReads=[];
+const studentEntry=await readEntry();
+assert.equal(studentEntry.status,200);
+assert.deepEqual(Object.keys((await studentEntry.json()).entry).sort(),['authMethod','name','role']);
+assert.equal(queryReads.length,0,'Entry must not read rosters, exams, attempts or banks');
+assert.equal((await readEntry({cookie:'cbt_session=invalid'})).status,401);
 const portal=await state();assert.equal(portal.studentPortal,true);assert.equal(portal.student.id,pupil.id);assert.equal(portal.attempts.length,1);assert.equal(portal.attempts[0].score,90);assert(!portal.banks&&!portal.staffList&&!portal.loginAccounts);
 // Hundreds of schedules must not reload the whole student roster or question bank per exam.
 for(let i=0;i<404;i++)await writeRecord('scale-exam-'+i,'exam',{...reviewExams[0],id:'scale-exam-'+i,participantsSelected:true,studentIds:[pupil.id],excludedStudentIds:i%2?[pupil.id]:[]});
@@ -217,7 +224,7 @@ async function authCall(action,body={},expected=200){const response=await authRo
 const owner=(await state()).staff;const ownerCard={username:'qa.owner.password',password:'qa-owner-private-test-2026'};
 // Bootstrap a test credential directly, then use actual authenticated endpoints for every role.
 await authlib.writeRecord('credential-'+ownerCard.username,'credential',{staffId:owner.id,username:ownerCard.username,salt:'qa-owner-salt',hash:await pw.passwordHash(ownerCard.password,'qa-owner-salt'),revision:'qa-owner-rev'});
-await loginCard(ownerCard);assert.equal((await state()).staff.role,'Super Admin');assert.equal((await state()).authMethod,'password');
+await loginCard(ownerCard);queryReads=[];assert.equal((await (await readEntry()).json()).entry.role,'Super Admin');assert.equal(queryReads.length,0);assert.equal((await state()).staff.role,'Super Admin');assert.equal((await state()).authMethod,'password');
 await call('saveStaff',{data:{name:'Admin Unit Login QA',email:'role-admin@test.invalid',role:'Admin Unit',unit:'SD',permission:'Full akses'}});const roleAdmin=(await state()).staffList.find(s=>s.email==='role-admin@test.invalid');const adminCard={username:'qa.admin.sd',password:'qa-admin-private-test-2026'};await authCall('setCredential',{staffId:roleAdmin.id,...adminCard});
 await call('saveStaff',{data:{name:'Guru Login QA',email:'role-teacher@test.invalid',niy:'QA.GURU.2026',role:'Guru',unit:'SD',assignments:[{unit:'SD',subject:'Matematika',classes:['5A']}]}});const roleTeacher=(await state()).staffList.find(s=>s.email==='role-teacher@test.invalid');const roleTeacherCard=(await call('accountCards',{kind:'teacher',id:roleTeacher.id})).cards[0];
 await call('saveClass',{data:{name:'1QA',grade:'1',unit:'SMP',year:'2026/2027'}});await call('saveStudent',{data:{name:'Outside-unit pupil',nis:'QA-SMP',unit:'SMP',className:'1QA',gender:'L'}});const outsidePupil=(await state()).students.find(s=>s.nis==='QA-SMP');

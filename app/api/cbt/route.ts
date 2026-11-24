@@ -502,5 +502,18 @@ else fail('Tindakan tidak dikenal');return Response.json({ok:true});
 if(demo&&!await get("catalog-v2"))await ensureCatalog();
 return {GET,POST};
 }
-export async function GET(req:Request){try{return await (await handlers(req)).GET(req)}catch{return Response.json({error:"Tidak dapat memuat data."},{status:400})}}
+async function readEntry(req:Request){
+ const headers={'Cache-Control':'no-store'};
+ let account:Awaited<ReturnType<typeof actor>>;
+ try{account=await actor(req);}
+ catch(error:any){return Response.json({error:error.message},{status:401,headers});}
+ const staff=account.staff;
+ if(staff?.disabled||staff?.deletedAt)return Response.json({error:'Akun tidak aktif.'},{status:401,headers});
+ if(!staff){
+   const installed=await env.DB.prepare('SELECT id FROM records WHERE id=?').bind('installation').first();
+   return Response.json({needsSetup:!installed,user:account.user},{headers});
+ }
+ return Response.json({entry:{name:staff.name,role:staff.role,authMethod:account.authMethod}},{headers});
+}
+export async function GET(req:Request){try{if(new URL(req.url).searchParams.get('entry')==='1')return await readEntry(req);return await (await handlers(req)).GET(req)}catch{return Response.json({error:"Tidak dapat memuat data."},{status:400})}}
 export async function POST(req:Request){try{return await (await handlers(req)).POST(req)}catch{return Response.json({error:"Permintaan tidak valid."},{status:400})}}
