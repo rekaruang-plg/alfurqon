@@ -360,6 +360,20 @@ function alignGradingKeys(attempt:any,bank:any){
  if(changed){attempt.graded=false;delete attempt.score;}
  return changed;
 }
+async function gradingQuestionOrder(exam:any):Promise<string[]>{
+ const seen=new Set<string>();
+ let current=exam;
+ while(current&&!seen.has(current.id)){
+   seen.add(current.id);
+   const snapshot=await db().prepare("SELECT json_extract(data,'$.resumeFor') AS resumed_for,(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(question_snapshot.data,'$.questions')) AS question_ids FROM records AS question_snapshot WHERE id=? AND kind=?").bind('snapshot-'+current.id,'snapshot').first();
+   if(snapshot&&!snapshot.resumed_for){
+     const ids=JSON.parse(String(snapshot.question_ids||'[]'));
+     if(ids.length)return ids;
+   }
+   current=current.parentExamId?await get(current.parentExamId):null;
+ }
+ return [];
+}
 async function studentOverview(studentId:string,studentMenu?:string|null){
  const student=await get(studentId);if(!student)fail('Data siswa tidak ditemukan.');
  if(studentMenu&&!['Dashboard','Jadwal ujian','Hasil ujian'].includes(studentMenu))fail('Menu siswa tidak tersedia.');
@@ -630,9 +644,17 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
    const attempt=readAttempt(full);
    await settleAttempt(attempt);
    if(attempt.status!=='Dikumpulkan')return missing();
-   if(exam.bankId)alignGradingKeys(attempt,await get(exam.bankId));
+   const [snapshotOrder,bank]=await Promise.all([
+     gradingQuestionOrder(exam),
+     exam.bankId?get(exam.bankId):null,
+   ]);
+   if(attempt.questions?.length)alignGradingKeys(attempt,bank);
+   const order:string[]=snapshotOrder.length?snapshotOrder:(bank?.questions||[]).map((q:Question)=>q.id);
+   const positions=new Map(order.map((id,index)=>[id,index]));
+   const questions=[...(attempt.questions||[])].sort((a:Question,b:Question)=>
+     (positions.get(a.id)??order.length)-(positions.get(b.id)??order.length)||a.id.localeCompare(b.id));
    const {sessionHash,...result}=attempt;
-   return Response.json(result,{headers});
+   return Response.json({...result,questions},{headers});
  }
  return missing();
 }

@@ -15,6 +15,7 @@ const strip=s=>s.replace(/^import .*;\n/gm,'');
 const {postgresQuery}=evaluate(fs.readFileSync('lib/production-db.ts','utf8')+'\nexport {postgresQuery};',{require:()=>null});
 const compactSaveSQL="UPDATE attempts SET data=json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?)),version=version+1 WHERE id=? AND version=?";
 assert.match(postgresQuery(compactSaveSQL),/\|\| \$1::text::jsonb.*\|\| \$4::text::jsonb/);
+assert.match(postgresQuery("SELECT (SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(question_snapshot.data,'$.questions')) AS question_ids FROM records AS question_snapshot WHERE id=?"),/jsonb_agg\(q->'id' ORDER BY ord\).*WITH ORDINALITY/);
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
 const examMode=evaluate(fs.readFileSync('lib/teacher-exam-mode.ts','utf8'),{});
 let teacherModeEnabled=false;
@@ -564,6 +565,37 @@ for(const a of attempts){assert.equal(a.questions.length,9);const i=a.questions.
 await call('answer',{token:tokens[1].token,questionId:'unique-q4',value:'0'});
 const resumed=await call('enter',{token:tokens[1].token});assert.deepEqual(resumed.questions,attempts[1].questions);assert.equal(resumed.answers['unique-q4'],'0');
 const legacy=await call('enter',{token:tokens[0].token});assert.deepEqual(legacy.questions,first.questions);
+// Correction uses the frozen package order, even after the working bank is reordered.
+const packageOrder=questions.map(q=>q.id);
+const originalBank=await record(ub.id);
+await writeRecord(ub.id,'bank',{...originalBank,questions:[...originalBank.questions].reverse()});
+async function correction(attemptId){
+ const params=new URLSearchParams({year:period.year,semester:String(period.semester),detail:'grade',id:attemptId});
+ const response=await routes.GET(new Request('https://cbt.test/api/cbt?'+params,{headers:{cookie}}));
+ assert.equal(response.status,200);
+ return response.json();
+}
+for(const a of attempts.slice(0,2)){
+ sql.prepare("UPDATE attempts SET data=json_set(data,'$.status','Dikumpulkan') WHERE id=?").run(a.id);
+ const select=sql.prepare('SELECT data,question_data,version FROM attempts WHERE id=?');
+ const stored=select.get(a.id);
+ const review=await correction(a.id);
+ assert.deepEqual(review.questions.map(q=>q.id),packageOrder);
+ assert.equal(review.answers['unique-q4'],a===attempts[1]?'0':undefined);
+ assert.deepEqual(select.get(a.id),stored);
+}
+const retakeId='unique-order-resumed-exam';
+const retakeAttempt='unique-order-resumed-attempt';
+const originalAttempt=await correction(attempts[1].id);
+await writeRecord(retakeId,'exam',{...ue,id:retakeId,parentExamId:ue.id});
+const originalById=new Map(originalAttempt.questions.map(q=>[q.id,q]));
+const shuffled=attempts[1].questions.map(q=>originalById.get(q.id));
+await writeRecord('snapshot-'+retakeId,'snapshot',{questions:shuffled,resumeFor:originalAttempt.studentId});
+sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)').run(
+ retakeAttempt,originalAttempt.studentId,retakeId,'unique-order-resumed-token',
+ JSON.stringify({...originalAttempt,id:retakeAttempt,examId:retakeId,questions:shuffled}));
+assert.deepEqual((await correction(retakeAttempt)).questions.map(q=>q.id),packageOrder);
+await writeRecord(ub.id,'bank',originalBank);
 console.log('PASS: 30 simultaneous participants receive distinct persisted permutations, shared passage groups stay together, legacy order excluded, resume and answer identity preserved.');
 }
 
