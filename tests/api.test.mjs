@@ -100,6 +100,8 @@ const changed=structuredClone((await state()).banks.find(b=>b.id===bank.id));cha
 // Import validation and atomic save.
 await call('saveClass',{data:{name:'6B',grade:'6',unit:'SD',year:'2026/2027'}});let rows=[{Nama:'Siswa Impor',NIS:'000123',Unit:'SD',Kelas:'6B',Tahun:'2026/2027',JK:'L'}];assert((await call('importStudents',{rows})).valid);await call('importStudents',{rows,commit:true});assert((await call('importStudents',{rows})).valid);
 // Correction-only teacher may publish assigned results under revised policy.
+const firstGrader=(await state()).staffList.find(t=>t.email==='teacher@example.test');
+await call('saveDuties',{examId:exam.id,duties:[{staffId:firstGrader.id,role:'grade'}]});
 sql.prepare("UPDATE attempts SET data=json_set(data,'$.deadline',0) WHERE id=?").run(fresh.id);await call('submit',{token:t3,session:'22222222-2222-4222-a222-222222222222'});user={email:'teacher@example.test',displayName:'Guru'};await call('grade',{id:fresh.id,grades:Object.fromEntries(fresh.questions.map(q=>[q.id,q.points]))});await call('publish',{id:fresh.id});user={email:'qa@example.test',displayName:'QA Admin'};
 // Backup restore into an empty database preserves ids, answers, and counts.
 const backup=await call('backup');
@@ -127,6 +129,7 @@ let review=await state();const reviewExams=review.exams.filter(e=>e.title==='ASA
 await call('generate',{examId:reviewExams[0].id},400);
 const teacherInfo=review.staffList.find(t=>t.email==='teacher@example.test');
 await call('saveStaff',{data:{...teacherInfo,permission:'Upload dan koreksi',assignments:[{unit:'SD',subject:'Matematika',classes:['5A','5B']}],gender:'P'}});
+for(const e of reviewExams)await call('saveDuties',{examId:e.id,duties:[{staffId:teacherInfo.id,role:'full'}]});
 user={email:'teacher@example.test',displayName:'Guru'};
 const isian={id:'written1',type:'ISIAN',text:'Sebutkan dua bentuk',options:[],key:'Lingkaran dan persegi',keywords:'lingkaran;persegi',points:20,mode:'TEKS'};
 await call('saveBank',{data:{title:'Soal ASAS',topic:'ASAS 2026',unit:'SD',grade:'5',subject:'Matematika',examIds:reviewExams.map(e=>e.id),questions:[pgk,isian]}});
@@ -161,13 +164,13 @@ sql.prepare("DELETE FROM records WHERE id LIKE 'scale-exam-%'").run();
 console.log('PASS: student dashboard handles 404 schedules with bounded roster reads and correct exclusions.');
 assert.equal((await call('studentLaunch',{examId:reviewExams[0].id})).token,tk);await call('studentLaunch',{examId:exam.id},400);await call('saveSubject',{data:{name:'Forbidden',unit:'SD'}},400);await call('enter',{token},400);
 cookie='';user={email:'qa@example.test',displayName:'QA Admin'};
-// Homeroom may download published results but must not grade another teacher's mapel.
+// Homeroom can see its students. Exam results require a duty on that schedule.
 await call('saveStaff',{data:{name:'Wali',email:'wali@test.invalid',role:'Guru',unit:'SD',subject:'Bahasa Arab',permission:'Koreksi saja',assignments:[{unit:'SD',subject:'Bahasa Arab',classes:['5A']}]}});
 review=await state();const wali=review.staffList.find(t=>t.email==='wali@test.invalid'),c5=review.classes.find(c=>c.name==='5A');await call('saveClass',{data:{...c5,homeroomId:wali.id}});
-user={email:'wali@test.invalid',displayName:'Wali'};const wd=await state();assert(wd.students.some(s=>s.id===pupil.id));const wr=wd.attempts.find(a=>a.id===attempt.id);assert(wr.readOnly);assert.equal(wr.score,90);assert(!wr.questions);await call('grade',{id:attempt.id,grades:{cx:30,written1:20}},400);
+user={email:'wali@test.invalid',displayName:'Wali'};const wd=await state();assert(wd.students.some(s=>s.id===pupil.id));assert(!wd.attempts.some(a=>a.id===attempt.id));await call('grade',{id:attempt.id,grades:{cx:30,written1:20}},400);
 user={email:'admin@example.test',displayName:'Admin SMP'};await call('accountCards',{kind:'student',id:pupil.id}).then(r=>assert.equal(r.cards.length,0));await call('importClasses',{rows:[{Unit:'SD',Kelas:'Illegal',Tingkat:'6',Tahun:'2026/2027'}],commit:true},400);
 assert.equal(policy.answeredQuestion({type:'MENJODOHKAN',left:['a','b'],right:['a','b']},'0,'),false);
-console.log('PASS: review document flows, bulk classes, multi-class topic schedule, teacher creation/bank linkage, short tokens, identity checkbox, quarter duration, complete submission after the time gate, editable complex-choice scores, keyword suggestions, actual student password login, own historical results, homeroom read-only access and unit isolation.');
+console.log('PASS: review document flows, bulk classes, multi-class topic schedule, teacher creation/bank linkage, short tokens, identity checkbox, quarter duration, complete submission after the time gate, editable complex-choice scores, keyword suggestions, actual student password login, own historical results, homeroom permissions and unit isolation.');
 // Token-only return dashboard: requires the original device session and exposes only own records.
 cookie='';user=null;
 await call('tokenDashboard',{token:tk,session:'22222222-2222-4222-a222-222222222222'},400);
@@ -761,9 +764,11 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  const bankId='r6-bank-sd',examId='scoped-exam-sd',studentId='r6-pupil-sd';
  await writeRecord(examId,'exam',{...await record('r6-exam-sd'),id:examId,bankId,participantsSelected:true,studentIds:[studentId],excludedStudentIds:[],duties:[{staffId:'scoped-grader',role:'grade'},{staffId:'r6-proctor',role:'proctor'}]});
  await writeRecord('scoped-grader','staff',{name:'Guru Koreksi QA',email:'scoped-grader@test.invalid',role:'Guru',unit:'SD',year:period.year,assignments:[{unit:'SD',subject:'Matematika',classes:['6 QA']}]});
+ await writeRecord('scoped-peer','staff',{name:'Guru Mapel Sama QA',email:'scoped-peer@test.invalid',role:'Guru',unit:'SD',year:period.year,assignments:[{unit:'SD',subject:'Matematika',classes:['6 QA']}]});
  await writeRecord('scoped-unrelated-student','student',{name:'Other class',unit:'SD',className:'UNSCHEDULED',year:period.year,nis:'QA-OTHER'});
  const question={id:'scoped-question',sourceId:'original-source',type:'PG',scope:'Lingkup QA',text:'PRIVATE_QUESTION_TEXT',key:'0',options:['a','b'],points:10,images:['data:image/png;base64,AAAA']};
- await writeRecord(bankId,'bank',{title:'Scoped image package',unit:'SD',subject:'Matematika',year:period.year,semester:1,questions:[question]});
+ await writeRecord(bankId,'bank',{title:'Scoped image package',unit:'SD',subject:'Matematika',year:period.year,semester:1,createdBy:'scoped-author',questions:[question]});
+ await writeRecord('scoped-grader-private','bank',{title:'Paket pribadi korektor',unit:'SD',subject:'Matematika',year:period.year,semester:1,createdBy:'scoped-grader',questions:[question]});
  await writeRecord('snapshot-'+examId,'snapshot',{questions:[question]});
  const attemptId='scoped-grade-test';
  sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)').run(attemptId,studentId,examId,'scoped-grade-hash',JSON.stringify({id:attemptId,studentId,examId,questions:[question],answers:{'scoped-question':'0'},grades:{'scoped-question':10},graded:true,status:'Dikumpulkan',sessionHash:'private-session'}));
@@ -841,6 +846,8 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  const corrected=(await read({detail:'gradeExam',id:examId})).attempts[0];
  assert.deepEqual(corrected.points,{earned:9.25,maximum:10,provisional:false});
  assert.equal(corrected.score,92.5);
+ assert((await read({menu:'Bank soal'})).banks.some(b=>b.id===bankId));
+ assert((await read({menu:'Bank soal'})).banks.some(b=>b.id==='scoped-grader-private'));
  const schedule=await record(examId);
  const now=Date.now();
  await writeRecord(examId,'exam',{...schedule,end:new Date(now-1000).toISOString()});
@@ -869,6 +876,22 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  user={email:'r6-admin-sd@test.invalid',displayName:'Admin SD'};
  assert.equal((await read({detail:'grade',id:attemptId})).id,attemptId);
  assert.equal((await read({detail:'bank',id:bankId})).id,bankId);
+ user={email:'scoped-peer@test.invalid',displayName:'Guru Mapel Sama QA'};
+ for(const menu of ['Bank soal','Buat soal']){
+   assert(!(await read({menu})).banks.some(b=>[bankId,'scoped-grader-private'].includes(b.id)));
+ }
+ for(const menu of ['Koreksi & nilai','Monitoring','Token ujian']){
+   assert(!(await read({menu})).exams.some(e=>e.id===examId));
+ }
+ assert(!(await state(period)).banks.some(b=>b.id===bankId));
+ const peerEntry=(await read({entry:'1'})).entry;
+ assert.deepEqual(peerEntry.navigation,{token:false,monitor:false,grade:false});
+ await read({detail:'bank',id:bankId},404);
+ await read({detail:'gradeExam',id:examId},404);
+ await read({detail:'grade',id:attemptId},404);
+ await read({monitorExam:examId},403);
+ await call('generateShared',{period,examId},400);
+ await call('grade',{period,id:attemptId,grades:{[question.id]:10}},400);
  user={email:'r6-proctor@test.invalid',displayName:'Pengawas SD'};
  const teacherList=await read({menu:'Guru'});
  assert.equal(teacherList.menu,'Guru');
@@ -876,6 +899,8 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert(!teacherList.banks.length&&!teacherList.exams.length&&!teacherList.attempts.length);
  const teacherToken=await read({menu:'Token ujian'});
  assert(teacherToken.exams.length>0&&teacherToken.exams.every(e=>e.unit==='SD'));
+ assert((await read({menu:'Monitoring'})).exams.some(e=>e.id===examId));
+ await read({detail:'bank',id:bankId},404);
  const teacherGrades=await read({menu:'Koreksi & nilai'});
  assert(!teacherGrades.attempts.some(a=>a.id===attemptId));
  await read({detail:'gradeExam',id:examId},404);
