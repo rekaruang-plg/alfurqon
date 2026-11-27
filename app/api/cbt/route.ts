@@ -449,9 +449,8 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const list=async(kind:string)=>kinds.includes(kind)?(await all(kind)).filter(scope):[];
  const bankMenu=['Bank soal','Buat soal','Simulasi ujian'].includes(menu);
  const needsSources=menu==='Bank soal'||menu==='Buat soal';
- // The token list uses schedule and token metadata. Per-student progress
- // belongs to Monitoring, which opens when the operator selects Peserta.
- const needsAttempts=['Monitoring','Koreksi & nilai'].includes(menu);
+ // Monitoring loads participant progress after an exam is selected.
+ const needsAttempts=menu==='Koreksi & nilai';
  const needsShared=menu==='Token ujian'||menu==='Monitoring';
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
@@ -490,7 +489,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
        for(const row of rows.results)sources.set(row.id.slice('snapshot-'.length),JSON.parse(row.question_index||'[]'));
      }
      if(needsAttempts){
-       const progressFields=menu==='Koreksi & nilai'?",json_extract(data,'$.graded') AS graded,json_extract(data,'$.published') AS published,json_extract(data,'$.correctedAt') AS corrected_at,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.securityLocked') AS security_locked":"";
+       const progressFields=",json_extract(data,'$.graded') AS graded,json_extract(data,'$.published') AS published,json_extract(data,'$.correctedAt') AS corrected_at,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.securityLocked') AS security_locked";
        const rows=await db().prepare("SELECT id,exam_id,student_id,json_extract(data,'$.status') AS status"+progressFields+" FROM attempts WHERE exam_id IN ("+marks+")").bind(...ids).all();
        for(const row of rows.results){
          const expired=row.status==='Mengerjakan'&&(!Number(row.paused_at)||row.security_locked===true||row.security_locked===1||row.security_locked==='true')&&Date.now()>=Number(row.deadline??NaN);

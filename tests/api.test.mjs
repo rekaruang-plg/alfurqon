@@ -665,7 +665,7 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
    assert(!JSON.stringify(result).includes('PRIVATE_QUESTION_TEXT'),menu);
    assert(!JSON.stringify(result).includes('private-session'),menu);
    if(!['Bank soal','Buat soal','Simulasi ujian'].includes(menu))assert(queryReads.every(row=>!['bank','snapshot','draft'].includes(row.values[0])),menu);
-   if(!['Monitoring','Koreksi & nilai'].includes(menu))assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
+   if(menu!=='Koreksi & nilai')assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
  }
  const activity=await read({menu:'Riwayat aktivitas'});
  queryReads=[];
@@ -876,6 +876,15 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  }
  console.log('PASS: 1,000 synthetic attempts retained every answer; retrying submit produced no additional writes.');
  await loginCard(ownerCard);
+ const monitoringMenuUrl='https://cbt.test/api/cbt?year=2026%2F2027&semester=1&menu=Monitoring&menuVersion=2';
+ queryReads=[];
+ const menuResponse=await routes.GET(new Request(monitoringMenuUrl,{headers:{cookie}}));
+ assert.equal(menuResponse.status,200);
+ const menu=await menuResponse.json();
+ assert.equal(menu.operations,true);
+ assert(menu.exams.some(exam=>exam.id===examId&&exam.canMonitor));
+ assert.equal(menu.attempts.length,0);
+ assert(queryReads.every(read=>!read.query.includes('FROM attempts')),'Opening Monitoring must not read attempts');
  const monitoringUrl='https://cbt.test/api/cbt?year=2026%2F2027&semester=1&monitorExam='+examId;
  const monitor=()=>routes.GET(new Request(monitoringUrl,{headers:{cookie}}));
  queryReads=[];
@@ -885,7 +894,10 @@ console.log('PASS: six source options are preserved for SMA; seven options still
  assert.equal(progress.attempts.length,1000);
  assert(progress.attempts.every(a=>a.answeredCount===2&&a.questionCount===2&&a.status==='Dikumpulkan'&&!('answers' in a)&&!('questions' in a)));
  assert(queryReads.every(read=>!['bank','snapshot','draft','audit'].includes(read.values[0])));
-const monitorRead=queryReads.find(read=>read.query.includes(' AS answered_count')&&read.values[0]===examId);
+const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'));
+ assert.equal(attemptReads.length,1);
+ const [monitorRead]=attemptReads;
+ assert.equal(monitorRead.values[0],examId);
 assert(monitorRead&&monitorRead.query.includes("'$.answers'"),'Monitoring counts answers while projecting them out');
  const outsideMonitor={username:'monitor-outside-qa',password:'monitor-outside-test-only'};
  const outsideMonitorId='monitor-outside-staff';
