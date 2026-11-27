@@ -744,7 +744,7 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
    assert(!JSON.stringify(result).includes('PRIVATE_QUESTION_TEXT'),menu);
    assert(!JSON.stringify(result).includes('private-session'),menu);
    if(!['Bank soal','Buat soal','Simulasi ujian'].includes(menu))assert(queryReads.every(row=>!['bank','snapshot','draft'].includes(row.values[0])),menu);
-   if(!['Token ujian','Koreksi & nilai'].includes(menu))assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
+   if(menu!=='Token ujian')assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
  }
  const activity=await read({menu:'Riwayat aktivitas'});
  queryReads=[];
@@ -766,8 +766,16 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert(!draftIndex.students.some(student=>student.id==='scoped-unrelated-student'));
  assert.equal(draftIndex.drafts.find(d=>d.id==='scoped-draft').form.title,'Draf tersimpan');
  assert.equal((await read({detail:'draft',id:'scoped-draft'})).questions[0].text,question.text);
+ const activeSchedule=await record(examId);
+ queryReads=[];
+ assert(!(await read({menu:'Koreksi & nilai'})).exams.some(e=>e.id===examId));
+ assert(!queryReads.some(row=>row.query.includes('FROM attempts')));
+ await read({detail:'gradeExam',id:examId},409);
+ await writeRecord(examId,'exam',{...activeSchedule,end:new Date(Date.now()-1000).toISOString()});
+ queryReads=[];
  const gradeIndex=await read({menu:'Koreksi & nilai'});
- assert(gradeIndex.attempts.find(a=>a.id===attemptId).graded);
+ assert.equal(gradeIndex.attempts.length,0);
+ assert(!queryReads.some(row=>row.query.includes('FROM attempts')));
  assert(gradeIndex.exams.some(e=>e.id===examId));
  assert(!gradeIndex.exams.some(e=>e.id==='r6-exam-smp'));
  queryReads=[];
@@ -777,6 +785,9 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert.equal(summary.questionCount,1);
  assert(!('answers' in summary)&&!('questions' in summary));
  assert.deepEqual(summary.points,{earned:10,maximum:10,provisional:false});
+ const gradingAttemptReads=queryReads.filter(row=>row.query.includes('FROM attempts'));
+ assert.equal(gradingAttemptReads.length,1);
+ assert.deepEqual(gradingAttemptReads[0].values,[examId]);
  const scoringSQL=postgresQuery(queryReads.find(r=>r.query.includes('AS scoring_answers')).query);
  assert.match(scoringSQL,/jsonb_array_elements\(COALESCE\(NULLIF\(score_attempt.question_data::jsonb/);
  assert.match(scoringSQL,/data::jsonb ->> 'answers'/);
@@ -802,7 +813,9 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  const now=Date.now();
  await writeRecord(examId,'exam',{...schedule,end:new Date(now-1000).toISOString()});
  setAttempt.run(JSON.stringify({...weightedAttempt,status:'Mengerjakan',deadline:now+60000}),JSON.stringify(weighted),attemptId);
- assert(!(await read({menu:'Koreksi & nilai'})).exams.some(e=>e.id===examId));
+ assert((await read({menu:'Koreksi & nilai'})).exams.some(e=>e.id===examId));
+ const stillRunning=await read({detail:'gradeExam',id:examId},409);
+ assert.match(stillRunning.error,/Masih ada siswa/);
  setAttempt.run(JSON.stringify({...weightedAttempt,status:'Mengerjakan',deadline:now-1000}),JSON.stringify(weighted),attemptId);
  assert((await read({menu:'Koreksi & nilai'})).exams.some(e=>e.id===examId));
  const expired=(await read({detail:'gradeExam',id:examId})).attempts[0];
@@ -846,7 +859,7 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert.equal(pupilResults.attempts[0].id,attemptId);
  assert(!JSON.stringify(pupilResults).includes('PRIVATE_QUESTION_TEXT'));
  assert(queryReads.some(row=>row.values[0]==='exam'&&row.query.includes('id IN')));
- await writeRecord('scoped-future-exam','exam',{...await record(examId),id:'scoped-future-exam',studentIds:[],participantsSelected:false,excludedStudentIds:[]});
+ await writeRecord('scoped-future-exam','exam',{...activeSchedule,id:'scoped-future-exam',studentIds:[],participantsSelected:false,excludedStudentIds:[]});
  const pupilSchedules=await read({studentMenu:'Jadwal ujian'});
  assert(pupilSchedules.exams.some(e=>e.id==='scoped-future-exam'));
  assert(!(await read({studentMenu:'Hasil ujian'})).exams.some(e=>e.id==='scoped-future-exam'));

@@ -21,7 +21,7 @@ const staffMenuRecords:Record<string,readonly string[]>={
  'Jadwal ujian':['exam','class','staff','subject','topic'],
  'Token ujian':['exam','student','subject','topic'],
  'Monitoring':['exam','student','subject','topic'],
- 'Koreksi & nilai':['exam','student','subject','topic'],
+ 'Koreksi & nilai':['exam','student'],
  'Bank soal':['exam','class','subject','topic'],
  'Buat soal':['exam','class','subject','topic'],
  'Simulasi ujian':['subject'],
@@ -483,8 +483,6 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const list=async(kind:string)=>kinds.includes(kind)?(await all(kind)).filter(scope):[];
  const bankMenu=['Bank soal','Buat soal','Simulasi ujian'].includes(menu);
  const needsSources=menu==='Bank soal'||menu==='Buat soal';
- // Monitoring loads participant progress after an exam is selected.
- const needsAttempts=menu==='Koreksi & nilai';
  const needsShared=menu==='Token ujian'||menu==='Monitoring';
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
@@ -500,8 +498,10 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const teacherClasses=teacher?classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
  const permittedExams=examsVisibleTo(staff,exams,teacherClasses);
  let visibleExams=kinds.includes('exam')?permittedExams:[];
- const gradingNow=Date.now();
- if(needsAttempts)visibleExams=visibleExams.filter(e=>Date.parse(e.start)<=gradingNow&&examPermission(staff,e,'grade'));
+ if(menu==='Koreksi & nilai'){
+   const now=Date.now();
+   visibleExams=visibleExams.filter(e=>Date.parse(e.end)<=now&&examPermission(staff,e,'grade'));
+ }
  const participantClasses=menu==='Buat soal'
    ?new Set(visibleExams.filter(e=>examPermission(staff,e,'bank')).map(e=>JSON.stringify([e.unit,e.className])))
    :new Set<string>();
@@ -514,44 +514,13 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    .filter((b:any)=>scope(b)&&(!b.deletedAt||b.retainQuestions))
    .map((b:any)=>b.deletedAt?{...b,archived:true}:b);
  const sources=new Map<string,any[]>();
- const attempts:any[]=[];
- if(needsAttempts||needsSources){
+ if(needsSources){
    for(let offset=0;offset<visibleExams.length;offset+=100){
      const ids=visibleExams.slice(offset,offset+100).map((e:any)=>e.id);
-     if(!ids.length)continue;
-     const marks=ids.map(()=>'?').join(',');
-     if(needsSources){
-       const rows=await db().prepare("SELECT id,"+questionIndexSQL+" AS question_index FROM records WHERE kind=? AND id IN ("+marks+")").bind('snapshot',...ids.map((id:string)=>'snapshot-'+id)).all();
-       for(const row of rows.results)sources.set(row.id.slice('snapshot-'.length),JSON.parse(row.question_index||'[]'));
-     }
-     if(needsAttempts){
-       const progressFields=",json_extract(data,'$.graded') AS graded,json_extract(data,'$.published') AS published,json_extract(data,'$.correctedAt') AS corrected_at,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.pauseUntil') AS pause_until,json_extract(data,'$.securityLocked') AS security_locked";
-       const rows=await db().prepare("SELECT id,exam_id,student_id,json_extract(data,'$.status') AS status"+progressFields+" FROM attempts WHERE exam_id IN ("+marks+")").bind(...ids).all();
-       for(const row of rows.results){
-         const cutoff=gradingCutoff({status:row.status,deadline:row.deadline,pausedAt:Number(row.paused_at),pauseUntil:Number(row.pause_until),securityLocked:row.security_locked},gradingNow);
-         attempts.push({id:row.id,examId:row.exam_id,studentId:row.student_id,status:cutoff!==undefined?'Dikumpulkan':row.status,
-           timedOut:cutoff!==undefined,graded:jsonFlag(row.graded),published:jsonFlag(row.published),correctedAt:Number(row.corrected_at)||undefined});
-       }
-     }
+     const rows=await db().prepare("SELECT id,"+questionIndexSQL+" AS question_index FROM records WHERE kind=? AND id IN ("+ids.map(()=>'?').join(',')+")").bind('snapshot',...ids.map((id:string)=>'snapshot-'+id)).all();
+     for(const row of rows.results)sources.set(row.id.slice('snapshot-'.length),JSON.parse(row.question_index||'[]'));
    }
  }
- if(needsAttempts){
-   const byExam=new Map<string,any[]>();
-   for(const a of attempts){
-     const group=byExam.get(a.examId);
-     if(group)group.push(a);
-     else byExam.set(a.examId,[a]);
-   }
-   visibleExams=visibleExams.filter(e=>{
-     const rows=byExam.get(e.id)||[];
-     if(!rows.some(a=>a.status==='Dikumpulkan')||rows.some(a=>a.status==='Mengerjakan'))return false;
-     if(gradingNow>=Date.parse(e.end))return true;
-     const submitted=new Set(rows.filter(a=>a.status==='Dikumpulkan'&&!a.timedOut).map(a=>a.studentId));
-     const enrolled=students.filter(s=>matchesEnrollment(s,e));
-     return enrolled.length>0&&enrolled.every(s=>submitted.has(s.id));
-   });
- }
- const completedIds=new Set(visibleExams.map(e=>e.id));
  const tokenById=new Map(sharedRows.map((r:any)=>[r.id,r]));
  const tokens=new Map<string,string>();
  if(menu==='Token ujian'){
@@ -591,7 +560,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    students:menu==='Buat soal'?participantStudents:students.filter(belongsYear).filter((x:any)=>!teacher||teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),
    staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p):menu==='Pengelola')
      .map((p:any)=>teacher?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),
-   subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts:attempts.filter(a=>completedIds.has(a.examId)),
+   subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts:[],
    drafts:draftRows.map((r:any)=>({...JSON.parse(r.summary),id:r.id,form:{title:r.title},summaryOnly:true})).filter(inPeriod),
    exams:visibleExams.map((e:any)=>{
      const token=tokenById.get('shared-'+e.id);
@@ -619,6 +588,8 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
  if(kind==='gradeExam'){
    const exam=await get(key);
    if(!exam||exam._kind!=='exam'||exam.deletedAt||!inPeriod(exam)||!examPermission(staff,exam,'grade'))return missing();
+   const now=Date.now();
+   if(!(Date.parse(exam.end)<=now))return Response.json({error:'Jadwal ujian masih berlangsung.'},{status:409,headers});
    const questionSource="COALESCE(NULLIF(score_attempt.question_data,'null'),json_extract(score_attempt.data,'$.questions'))";
    const [bank,{results}]=await Promise.all([
      exam.bankId?db().prepare("SELECT "+scoreQuestionsSQL("score_bank.data,'$.questions'")+" AS scoring_questions FROM records AS score_bank WHERE id=? AND kind='bank'").bind(exam.bankId).first():null,
@@ -626,9 +597,11 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
        +scoreQuestionsSQL(questionSource)+" AS scoring_questions,json_extract(data,'$.answers') AS scoring_answers,json_extract(data,'$.grades') AS scoring_grades FROM attempts AS score_attempt WHERE exam_id=?").bind(exam.id).all(),
    ]);
    const bankQuestions=bank?{questions:JSON.parse(bank.scoring_questions||'[]')}:undefined;
-   const now=Date.now();
-   const attempts=results.map((row:any)=>{
-     const a=JSON.parse(row.summary);
+   const summaries=results.map((row:any)=>({row,attempt:JSON.parse(row.summary)}));
+   if(summaries.some(({attempt})=>attempt.status==='Mengerjakan'&&gradingCutoff(attempt,now)===undefined)){
+     return Response.json({error:'Masih ada siswa yang mengerjakan. Buka detail lagi setelah ujian mereka selesai.'},{status:409,headers});
+   }
+   const attempts=summaries.map(({row,attempt:a})=>{
      const questions=JSON.parse(row.scoring_questions||'[]');
      const answers=JSON.parse(row.scoring_answers||'{}')||{};
      const cutoff=gradingCutoff(a,now);
