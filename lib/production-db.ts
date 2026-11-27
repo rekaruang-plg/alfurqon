@@ -79,6 +79,7 @@ export const env={
   DB:{prepare:(sql:string)=>new Statement(sql),batch:execute},
   get TOKEN_VAULT_KEY(){return process.env.TOKEN_VAULT_KEY},
   get SPLIT_ATTEMPT_QUESTIONS(){return process.env.CBT_SPLIT_ATTEMPT_QUESTIONS==='1';},
+  get SHARED_ATTEMPT_QUESTIONS(){return process.env.CBT_SHARED_ATTEMPT_QUESTIONS==='1';},
   get TEACHER_EXAM_MODE(){return process.env.CBT_TEACHER_EXAM_MODE==='1';},
   get WORD_CONVERTER_URL(){return process.env.WORD_CONVERTER_URL},
   get WORD_CONVERTER_TOKEN(){return process.env.WORD_CONVERTER_TOKEN}
