@@ -80,7 +80,7 @@ const dataUrl=(menu:string,useSaved=true)=>{
  const p=useSaved?savedPeriod():null;
  const query=new URLSearchParams();
  if(p){query.set('year',p.year);query.set('semester',String(p.semester));}
- if(scopedStaff){query.set('menu',menu);query.set('menuVersion','2');}
+ if(scopedStaff){query.set('menu',menu);query.set('menuVersion',['Token ujian','Monitoring','Koreksi & nilai'].includes(menu)?'3':'2');}
  else if(data?.studentPortal||role==='Siswa')query.set('studentMenu',menu);
  else if(menuUsesOperations(menu))query.set('view','operations');
  return '/api/cbt'+(query.size?'?'+query:'');
