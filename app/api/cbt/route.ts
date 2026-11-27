@@ -11,8 +11,6 @@ import { subjectCatalog,sampleQuestions } from '../../../lib/simulations';
 import { sealToken,openToken } from '../../../lib/token-vault';
 export const dynamic='force-dynamic';
 const MAX_EXAM_UNLOCKS=3;
-const STUDENT_DISCONNECT_LIMIT_MS=20*60_000;
-const STUDENT_DISCONNECT_REASON='Sesi tidak terhubung lebih dari 20 menit';
 const staffMenuRecords:Record<string,readonly string[]>={
  'Dashboard':['student','exam','class','staff'],
  'Tahun Pelajaran':[],
@@ -325,10 +323,9 @@ async function settleAttempt(a:any){
  if(a.pauseUntil&&Date.now()>=a.pauseUntil){const duration=a.pauseUntil-a.pausedAt;a.deadline+=duration;a.submitAfter=(a.submitAfter||0)+duration;a.lastSeenAt=a.pauseUntil;delete a.pausedAt;delete a.pauseUntil;delete a.remainingMs;delete a.remainingSubmitMs;await saveAttempt(a);}
  if(a.pausedAt&&!a.securityLocked)return;
  const now=Date.now(), cutoff=Number(a.deadline);
- const disconnected=!a.pausedAt&&a.strictExit&&now-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;
- if(!(now>=cutoff)&&!disconnected)return;
- a.status='Dikumpulkan';a.timedOut=now>=cutoff;a.submittedAt=a.timedOut?cutoff:now;
- a.exitReason=a.timedOut?'Waktu ujian berakhir':STUDENT_DISCONNECT_REASON;
+ if(!(now>=cutoff))return;
+ a.status='Dikumpulkan';a.timedOut=true;a.submittedAt=cutoff;
+ a.exitReason='Waktu ujian berakhir';
  delete a.securityLocked;delete a.securityReason;delete a.pausedAt;delete a.remainingMs;delete a.remainingSubmitMs;
  a.grades=mark(a.questions,a.answers);await saveAttempt(a);
 }
@@ -360,8 +357,7 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
    if(summary.status!=='Mengerjakan')continue;
    const resumeDue=summary.pauseUntil&&now>=summary.pauseUntil;
    const expired=(!summary.pausedAt||summary.securityLocked)&&now>=summary.deadline;
-   const disconnected=!summary.pausedAt&&summary.strictExit&&now-(summary.lastSeenAt||summary.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;
-   if(!resumeDue&&!expired&&!disconnected)continue;
+   if(!resumeDue&&!expired)continue;
    const row:any=await db().prepare('SELECT data,version,question_data FROM attempts WHERE id=? AND student_id=?').bind(summary.id,student.id).first();
    if(!row)continue;
    const attempt=readAttempt(row);
@@ -424,21 +420,18 @@ async function monitoringProgress(staff:any,examId:string){
    const attempt=JSON.parse(row.summary);
    let {status,pausedAt,timedOut,submittedAt,securityLocked,exitReason}=attempt;
    let deadline=Number(attempt.deadline);
-   let lastSeenAt=attempt.lastSeenAt||attempt.startedAt;
    // Mirror the displayed expiry without grading or writing from a polling request.
    if(status==='Mengerjakan'&&attempt.pauseUntil&&now>=attempt.pauseUntil){
      deadline+=attempt.pauseUntil-pausedAt;
-     lastSeenAt=attempt.pauseUntil;
      pausedAt=undefined;
    }
-   const disconnected=!pausedAt&&attempt.strictExit&&now-lastSeenAt>STUDENT_DISCONNECT_LIMIT_MS;
-   if(status==='Mengerjakan'&&(!pausedAt||securityLocked)&&(now>=deadline||disconnected)){
+   if(status==='Mengerjakan'&&(!pausedAt||securityLocked)&&now>=deadline){
      status='Dikumpulkan';
-     timedOut=now>=deadline;
-     submittedAt=timedOut?deadline:now;
+     timedOut=true;
+     submittedAt=deadline;
      pausedAt=undefined;
      securityLocked=false;
-     exitReason=timedOut?'Waktu ujian berakhir':STUDENT_DISCONNECT_REASON;
+     exitReason='Waktu ujian berakhir';
    }
    return {id:row.id,examId:row.exam_id,studentId:row.student_id,status,timedOut,submittedAt,
      pausedAt,securityLocked,exitReason,resetCount:attempt.resetCount||0,actionNotes:attempt.actionNotes,
@@ -684,12 +677,12 @@ async function saveCompactStudentUpdate(b:any){
  const a=JSON.parse(row.summary);
  const now=Date.now();
  if(a.status!=='Mengerjakan'||a.sessionHash!==sessionHash||a.pausedAt||a.pauseUntil||a.securityLocked||
-   !Number.isFinite(a.deadline)||now>=a.deadline||a.strictExit&&now-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS)return null;
+   !Number.isFinite(a.deadline)||now>=a.deadline)return null;
  const exam=await get(row.exam_id);
  const student=await studentFor(row.student_id,exam||{});
  if(!exam||exam.deletedAt||!student||student.deletedAt)return null;
  const savedAt=Date.now();
- if(savedAt>=a.deadline||a.strictExit&&savedAt-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS)return null;
+ if(savedAt>=a.deadline)return null;
  const guards=[row.id,row.version];
  if(saving){
    const entries=Object.entries(b.answers||{});
@@ -743,7 +736,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  }
  if(b.action!=='enter'&&a.status==='Belum mulai')fail('Mulai ujian terlebih dahulu.');
  if(a.status==='Mengerjakan'){
- const disconnected=a.strictExit&&Date.now()-(a.lastSeenAt||a.startedAt)>STUDENT_DISCONNECT_LIMIT_MS;const expired=Date.now()>=a.deadline||disconnected;
+ const expired=Date.now()>=a.deadline;
  if(b.action==='securityLock'&&!expired&&a.browserGuard){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}if((a.resetCount||0)>=MAX_EXAM_UNLOCKS){a.status='Dikumpulkan';a.submittedAt=Date.now();a.exitReason='Pelanggaran keempat. Kesempatan melanjutkan ujian habis';a.grades=mark(a.questions,a.answers);a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Jawaban otomatis dikumpulkan',reason:a.exitReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}a.securityLocked=true;a.securityReason=b.reason==='fullscreen'?'Keluar dari layar penuh':'Berpindah tab / halaman tidak terlihat';a.pausedAt=Date.now();a.remainingMs=Math.max(0,a.deadline-Date.now());a.remainingSubmitMs=Math.max(0,(a.submitAfter||0)-Date.now());a.actionNotes=[...(a.actionNotes||[]),{name:'Sistem',action:'Kunci halaman ujian',reason:a.securityReason,at:Date.now()}];await saveAttempt(a);return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});}
  if((b.action==='answer'||b.action==='saveAnswers')&&!expired){
    const entries=b.action==='answer'?[[b.questionId,b.value]]:Object.entries(b.answers||{});
@@ -762,7 +755,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  }
  if(b.action==='submit'&&!expired){const issue=submissionIssue(a);if(issue)fail(issue);}
  if(b.action==='exitExam'&&!expired){for(const [key,value] of Object.entries(b.answers||{})){if(a.questions.some((q:any)=>q.id===key)&&typeof value==='string'&&value.length<=20000)a.answers[key]=value;}a.exitReason='Keluar dari halaman ujian';}
- if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired&&!disconnected;if(disconnected)a.exitReason=STUDENT_DISCONNECT_REASON;a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}
+ if(b.action==='submit'||b.action==='exitExam'||expired){a.status='Dikumpulkan';a.timedOut=expired;a.submittedAt=Date.now();a.grades=mark(a.questions,a.answers);await saveAttempt(a)}
  }
  if(b.action==='submit'&&b.compact===true&&a.status==='Dikumpulkan'){
    return Response.json({
