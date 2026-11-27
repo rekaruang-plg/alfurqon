@@ -235,7 +235,7 @@ async function attemptByToken(token:string){if(typeof token!=='string'||token.le
 // Keep the original serialized snapshot so status/answer writes leave its TOAST value alone.
 const storedQuestions=new WeakMap<object,string>();
 function readAttempt(row:any){
- const attempt={...JSON.parse(row.data),version:row.version};
+ const attempt={id:row.id,...JSON.parse(row.data),version:row.version};
  if(row.question_data!=null){
    attempt.questions=JSON.parse(row.question_data);
    storedQuestions.set(attempt,row.question_data);
