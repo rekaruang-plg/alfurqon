@@ -152,7 +152,25 @@ async function isExamParticipant(studentId:string,exam:any){
  return !student.deletedAt&&matchesEnrollment(student,exam);
 }
 async function sharedToken(e:any,rotate=false){let v=await get('shared-'+e.id);if(rotate||!v||!v.rotationVersion){const token=(demo?'DEMO-':'')+Array.from(crypto.getRandomValues(new Uint8Array(10))).map(n=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[n%32]).join('');const vault=await sealToken(token,e.id,await env.TOKEN_VAULT_KEY);await put('shared_token',{rotationVersion:1,issuedSlot:Math.floor(Date.now()/900000),id:'shared-'+e.id,...(v?{version:v.version}:{}),vault,hash:await hash(token)});v=await get('shared-'+e.id);}if(v.issuedSlot!==undefined&&v.issuedSlot!==Math.floor(Date.now()/900000))fail('Token sudah kedaluwarsa. Minta pengawas generate kembali.');const seed=await openToken(v.vault,e.id,await env.TOKEN_VAULT_KEY);const slot=Math.floor(Date.now()/900000);const digest=await hash(seed+':'+e.id+':'+slot);return (demo?'DEMO-':'')+Array.from({length:5},(_,i)=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[parseInt(digest.slice(i*2,i*2+2),16)%32]).join('');}
-async function roster(e:any){const pupils=await participants(e);if(!pupils.length)fail('Tidak ada peserta yang dipilih untuk ujian ini.');await freezeExam(e);for(const st of pupils){const row:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(st.id,e.id).first();if(row){const a={...JSON.parse(row.data),version:row.version};if(a.status==='Belum mulai'&&!a.requiresLogin){a.requiresLogin=true;await saveAttempt(a);}continue;}await issueToken({id:id(),studentId:st.id,examId:e.id,status:'Belum mulai',answers:{},published:false,requiresLogin:true});}}
+async function roster(e:any){
+ const pupils=await participants(e);
+ if(!pupils.length)fail('Tidak ada peserta yang dipilih untuk ujian ini.');
+ await freezeExam(e);
+ const {results}=await db().prepare("SELECT id,student_id,json_extract(data,'$.status') AS status,json_extract(data,?) AS requires_login FROM attempts WHERE exam_id=?").bind('$.requiresLogin',e.id).all();
+ const existing=new Map(results.map(row=>[row.student_id,row]));
+ for(const st of pupils){
+   const current=existing.get(st.id);
+   if(!current){
+     await issueToken({id:id(),studentId:st.id,examId:e.id,status:'Belum mulai',answers:{},published:false,requiresLogin:true});
+     continue;
+   }
+   if(current.status!=='Belum mulai'||current.requires_login===true||current.requires_login===1||current.requires_login==='true')continue;
+   const row:any=await db().prepare('SELECT data,version FROM attempts WHERE id=?').bind(current.id).first();
+   if(!row)fail('Data peserta berubah. Coba generate kembali.');
+   const a={...JSON.parse(row.data),version:row.version};
+   if(a.status==='Belum mulai'&&!a.requiresLogin){a.requiresLogin=true;await saveAttempt(a);}
+ }
+}
 async function validateClass(unit:string,name:string,year:string){if(!(await all('class')).some((c:any)=>c.unit===unit&&c.name.trim().toLowerCase()===name.trim().toLowerCase()&&c.year===year))fail('Pilih kelas dan tahun ajaran dari data master.');}
 async function ensureMasters(){if(await get('master-v1'))return;await db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind('year-2026/2027','year',JSON.stringify({name:'2026/2027'})).run();const entries=[...await all('student'),...await all('exam')];for(const x of entries){if(!x.className)continue;const year=x.year||'2026/2027';const key='class-'+await hash(x.unit+':'+year+':'+x.className);await db().prepare('INSERT OR IGNORE INTO records(id,kind,data) VALUES(?,?,?)').bind(key,'class',JSON.stringify({name:x.className,unit:x.unit,year})).run();}await put('config',{id:'master-v1',ready:true});}
 async function subjectFor(unit:string,name:string){const sub=(await all('subject')).find((x:any)=>x.unit===unit&&x.name.trim().toLowerCase()===name.trim().toLowerCase());if(!sub)fail('Pilih mata pelajaran dari data master pada unit ini.');return sub;}
