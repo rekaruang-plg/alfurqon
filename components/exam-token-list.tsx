@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { CalendarDays, Check, ClipboardCopy, Clock3, KeyRound, UsersRound } from 'lucide-react';
+import { monitoringScheduleStatus } from '../lib/exam-status';
 
 type Exam = {
   id: string;
@@ -13,7 +14,9 @@ type Exam = {
   year?: string;
   start: string;
   end: string;
+  status?: string;
   canProctor: boolean;
+  canMonitor?: boolean;
   participantsSelected?: boolean;
   studentIds?: string[];
   excludedStudentIds?: string[];
@@ -26,16 +29,18 @@ type Props = {
   students: Student[];
   canFilterUnit: boolean;
   clock: number;
-  run: (action: string, payload: { examId: string }, message: string) => Promise<{ token?: string } | null>;
   navigate: (id: string) => void;
-};
+} & ({ mode?: 'token'; run: (action: string, payload: { examId: string }, message: string) => Promise<{ token?: string } | null> }
+  | { mode: 'monitoring'; hidden?: boolean; run?: never });
 
 const zone = 'Asia/Jakarta';
 const dateKey = new Intl.DateTimeFormat('en-CA', { timeZone: zone, dateStyle: 'short' });
 const dateLabel = new Intl.DateTimeFormat('id-ID', { timeZone: zone, dateStyle: 'full' });
 const timeLabel = new Intl.DateTimeFormat('id-ID', { timeZone: zone, hour: '2-digit', minute: '2-digit' });
 
-export default function ExamTokenList({ exams, students, canFilterUnit, clock, run, navigate }: Props) {
+export default function ExamTokenList(props: Props) {
+  const {exams,students,canFilterUnit,clock,navigate,mode,run}=props;
+  const monitoring=mode==='monitoring';
   const [filters, setFilters] = useState({ date: '', unit: '', topic: '', subject: '', status: '' });
   const busy = useRef(false);
   const [preparing, setPreparing] = useState('');
@@ -53,29 +58,38 @@ export default function ExamTokenList({ exams, students, canFilterUnit, clock, r
     }
     return { byClass, visibleIds };
   }, [students]);
-  // The API has already scoped schedules and codes to the current operator.
-  const schedules = exams.filter(exam => exam.canProctor && clock < Date.parse(exam.end))
-    .sort((left, right) => Date.parse(left.start) - Date.parse(right.start));
+  if(monitoring&&props.hidden)return null;
+  const schedules=exams.flatMap(exam=>{
+    const status=monitoring
+      ?exam.canMonitor&&monitoringScheduleStatus(exam,clock)
+      :exam.canProctor&&clock<Date.parse(exam.end)&&(clock>=Date.parse(exam.start)?'Berlangsung':'Belum mulai');
+    return status?[{exam,status}]:[];
+  }).sort((left,right)=>{
+    if(monitoring&&left.status!==right.status)return left.status==='Berlangsung'?-1:1;
+    if(left.status==='Selesai')return Date.parse(right.exam.end)-Date.parse(left.exam.end);
+    return Date.parse(left.exam.start)-Date.parse(right.exam.start);
+  });
   const days = new Map<string, string>();
-  const groups = new Map<string, Exam[]>();
-  for (const exam of schedules) {
+  const groups = new Map<string, { label: string; schedules: typeof schedules }>();
+  for (const schedule of schedules) {
+    const {exam,status}=schedule;
     const start = new Date(exam.start);
     const key = dateKey.format(start);
-    const status = clock >= +start ? 'Berlangsung' : 'Belum mulai';
     days.set(key, dateLabel.format(start));
     if ((filters.date && filters.date !== key) || (filters.unit && filters.unit !== exam.unit) ||
         (filters.topic && filters.topic !== exam.topic) || (filters.subject && filters.subject !== exam.subject) ||
         (filters.status && filters.status !== status)) continue;
-    const group = groups.get(key) || [];
-    group.push(exam);
-    groups.set(key, group);
+    const groupKey=monitoring?status+'|'+key:key;
+    const group=groups.get(groupKey)||{label:days.get(key)!,schedules:[]};
+    group.schedules.push(schedule);
+    groups.set(groupKey,group);
   }
   const options = (field: 'unit' | 'topic' | 'subject') =>
-    [...new Set(schedules.map(exam => exam[field]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id'));
+    [...new Set(schedules.map(({exam}) => exam[field]).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id'));
   const change = (key: keyof typeof filters, value: string) => setFilters(previous => ({ ...previous, [key]: value }));
 
   async function prepare(exam: Exam) {
-    if (busy.current) return;
+    if (busy.current||!run) return;
     busy.current = true;
     setPreparing(exam.id);
     try {
@@ -119,19 +133,19 @@ export default function ExamTokenList({ exams, students, canFilterUnit, clock, r
       </select></label>
       <label>Status ujian<select value={filters.status} onChange={e => change('status', e.target.value)}>
         <option value="">Semua status</option>
-        <option>Belum mulai</option>
+        {!monitoring&&<option>Belum mulai</option>}
         <option>Berlangsung</option>
+        {monitoring&&<option>Selesai</option>}
       </select></label>
     </div>
 
     {[...groups].map(([key, group], index) => <section key={key} className="token-schedule-day" aria-labelledby={'token-day-'+index}>
       <div className="token-day-heading">
-        <h2 id={'token-day-'+index}><CalendarDays size={17} aria-hidden="true"/>{days.get(key)}</h2>
-        <span>{group.length} jadwal</span>
+        <h2 id={'token-day-'+index}><CalendarDays size={17} aria-hidden="true"/>{group.label}</h2>
+        <span>{group.schedules.length} jadwal</span>
       </div>
       <ul className="token-schedule-list">
-        {group.map(exam => {
-          const active = Date.parse(exam.start) <= clock;
+        {group.schedules.map(({exam,status}) => {
           const code = exam.sharedCode || issued[exam.id];
           const ids = exam.participantsSelected || exam.studentIds?.length
             ? (exam.studentIds || []).filter(id => enrollment.visibleIds.has(id))
@@ -145,12 +159,12 @@ export default function ExamTokenList({ exams, students, canFilterUnit, clock, r
               <span className="token-class"><span>{exam.unit}</span>{exam.className}</span>
             </div>
             <div className="token-schedule-meta">
-              <span className={'token-schedule-status'+(active?' running':'')}>{active?'Berlangsung':'Belum mulai'}</span>
+              <span className={'token-schedule-status'+(status==='Berlangsung'?' running':status==='Selesai'?' finished':'')}>{status}</span>
               <span><Clock3 size={15} aria-hidden="true"/>{timeLabel.format(new Date(exam.start))}–{timeLabel.format(new Date(exam.end))} WIB</span>
               <span><UsersRound size={15} aria-hidden="true"/>{participants} peserta</span>
             </div>
             <div className="token-row-controls">
-              {code ? <div className="token-row-code">
+              {!monitoring&&(code ? <div className="token-row-code">
                 <span>Token ujian</span>
                 <div>
                   <code>{code}</code>
@@ -160,14 +174,16 @@ export default function ExamTokenList({ exams, students, canFilterUnit, clock, r
                 </div>
               </div> : <button type="button" className="primary" disabled={!!preparing} onClick={()=>void prepare(exam)}>
                 <KeyRound size={16} aria-hidden="true"/>{preparing===exam.id?'Menyiapkan…':exam.tokenExpiresAt?'Lihat token':'Siapkan token'}
-              </button>}
-              <button type="button" onClick={()=>navigate(exam.id)} aria-label={'Peserta '+exam.title+' '+exam.className}><UsersRound size={16} aria-hidden="true"/>Peserta</button>
+              </button>)}
+              <button type="button" onClick={()=>navigate(exam.id)} aria-label={(monitoring?'Lihat detail ':'Peserta ')+exam.title+' '+exam.className}>
+                <UsersRound size={16} aria-hidden="true"/>{monitoring?'Lihat detail':'Peserta'}
+              </button>
               {feedback?.id===exam.id&&<small className="token-copy-feedback" role="status">{feedback.copied?'Token disalin':'Salin kode secara manual'}</small>}
             </div>
           </li>;
         })}
       </ul>
     </section>)}
-    {!groups.size&&<p className="token-schedule-empty">Tidak ada jadwal yang sesuai dengan filter.</p>}
+    {!groups.size&&<p className="token-schedule-empty">{monitoring?'Belum ada ujian berlangsung atau selesai yang sesuai dengan filter.':'Tidak ada jadwal yang sesuai dengan filter.'}</p>}
   </div>;
 }
