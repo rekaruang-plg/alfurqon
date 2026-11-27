@@ -6,7 +6,7 @@ import {generatedAccount} from '../../../lib/generated-account';
 import {submissionIssue,editableGrade,written} from '../../../lib/review-policy';
 import { env } from '../../../lib/production-db';
 import { staffActor as actor, records as authRecords } from '../../../lib/staff-auth';
-import { starterQuestions,uniqueQuestionOrder,mark,choiceSet, type Question } from '../../../lib/model';
+import { starterQuestions,uniqueQuestionOrder,mark,choiceSet,gradingPoints, type Question } from '../../../lib/model';
 import { subjectCatalog,sampleQuestions } from '../../../lib/simulations';
 import { sealToken,openToken } from '../../../lib/token-vault';
 export const dynamic='force-dynamic';
@@ -30,6 +30,21 @@ const staffMenuRecords:Record<string,readonly string[]>={
 };
 
 const questionIndexSQL="(SELECT json_group_array(json_object('id',json_extract(value,'$.id'),'sourceId',json_extract(value,'$.sourceId'),'type',json_extract(value,'$.type'),'scope',json_extract(value,'$.scope'))) FROM json_each(records.data,'$.questions'))";
+const scoreQuestionFields=['id','type','points','key','keywords','caseSensitive','manualGrading'];
+function scoreQuestionsSQL(source:string){
+ const fields=scoreQuestionFields.map(field=>`'${field}',json_extract(value,'$.${field}')`).join(',');
+ return `(SELECT json_group_array(json_object(${fields})) FROM json_each(${source}))`;
+}
+const jsonFlag=(value:unknown)=>value===true||value===1||value==='true';
+
+// Follow the attempt cutoff without writing during staff list reads.
+function gradingCutoff(a:any,now:number){
+ if(a.status!=='Mengerjakan'||a.deadline==null)return;
+ const pauseEnded=a.pauseUntil&&now>=Number(a.pauseUntil);
+ if(a.pausedAt&&!pauseEnded&&!jsonFlag(a.securityLocked))return;
+ const cutoff=Number(a.deadline)+(pauseEnded?Number(a.pauseUntil)-Number(a.pausedAt):0);
+ return now>=cutoff?cutoff:undefined;
+}
 
 async function currentTeacherExamMode(staff:any){
  if(staff?.role!=='Guru'||staff.demo||!env.TEACHER_EXAM_MODE)return null;
@@ -485,6 +500,8 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const teacherClasses=teacher?classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
  const permittedExams=examsVisibleTo(staff,exams,teacherClasses);
  let visibleExams=kinds.includes('exam')?permittedExams:[];
+ const gradingNow=Date.now();
+ if(needsAttempts)visibleExams=visibleExams.filter(e=>Date.parse(e.start)<=gradingNow&&examPermission(staff,e,'grade'));
  const participantClasses=menu==='Buat soal'
    ?new Set(visibleExams.filter(e=>examPermission(staff,e,'bank')).map(e=>JSON.stringify([e.unit,e.className])))
    :new Set<string>();
@@ -500,7 +517,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const attempts:any[]=[];
  if(needsAttempts||needsSources){
    for(let offset=0;offset<visibleExams.length;offset+=100){
-     const ids=visibleExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
+     const ids=visibleExams.slice(offset,offset+100).map((e:any)=>e.id);
      if(!ids.length)continue;
      const marks=ids.map(()=>'?').join(',');
      if(needsSources){
@@ -508,16 +525,33 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
        for(const row of rows.results)sources.set(row.id.slice('snapshot-'.length),JSON.parse(row.question_index||'[]'));
      }
      if(needsAttempts){
-       const progressFields=",json_extract(data,'$.graded') AS graded,json_extract(data,'$.published') AS published,json_extract(data,'$.correctedAt') AS corrected_at,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.securityLocked') AS security_locked";
+       const progressFields=",json_extract(data,'$.graded') AS graded,json_extract(data,'$.published') AS published,json_extract(data,'$.correctedAt') AS corrected_at,json_extract(data,'$.deadline') AS deadline,json_extract(data,'$.pausedAt') AS paused_at,json_extract(data,'$.pauseUntil') AS pause_until,json_extract(data,'$.securityLocked') AS security_locked";
        const rows=await db().prepare("SELECT id,exam_id,student_id,json_extract(data,'$.status') AS status"+progressFields+" FROM attempts WHERE exam_id IN ("+marks+")").bind(...ids).all();
        for(const row of rows.results){
-         const expired=row.status==='Mengerjakan'&&(!Number(row.paused_at)||row.security_locked===true||row.security_locked===1||row.security_locked==='true')&&Date.now()>=Number(row.deadline??NaN);
-         attempts.push({id:row.id,examId:row.exam_id,studentId:row.student_id,status:expired?'Dikumpulkan':row.status,
-           graded:row.graded===1||row.graded==='true',published:row.published===1||row.published==='true',correctedAt:Number(row.corrected_at)||undefined});
+         const cutoff=gradingCutoff({status:row.status,deadline:row.deadline,pausedAt:Number(row.paused_at),pauseUntil:Number(row.pause_until),securityLocked:row.security_locked},gradingNow);
+         attempts.push({id:row.id,examId:row.exam_id,studentId:row.student_id,status:cutoff!==undefined?'Dikumpulkan':row.status,
+           timedOut:cutoff!==undefined,graded:jsonFlag(row.graded),published:jsonFlag(row.published),correctedAt:Number(row.corrected_at)||undefined});
        }
      }
    }
  }
+ if(needsAttempts){
+   const byExam=new Map<string,any[]>();
+   for(const a of attempts){
+     const group=byExam.get(a.examId);
+     if(group)group.push(a);
+     else byExam.set(a.examId,[a]);
+   }
+   visibleExams=visibleExams.filter(e=>{
+     const rows=byExam.get(e.id)||[];
+     if(!rows.some(a=>a.status==='Dikumpulkan')||rows.some(a=>a.status==='Mengerjakan'))return false;
+     if(gradingNow>=Date.parse(e.end))return true;
+     const submitted=new Set(rows.filter(a=>a.status==='Dikumpulkan'&&!a.timedOut).map(a=>a.studentId));
+     const enrolled=students.filter(s=>matchesEnrollment(s,e));
+     return enrolled.length>0&&enrolled.every(s=>submitted.has(s.id));
+   });
+ }
+ const completedIds=new Set(visibleExams.map(e=>e.id));
  const tokenById=new Map(sharedRows.map((r:any)=>[r.id,r]));
  const tokens=new Map<string,string>();
  if(menu==='Token ujian'){
@@ -557,7 +591,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    students:menu==='Buat soal'?participantStudents:students.filter(belongsYear).filter((x:any)=>!teacher||teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027'))),
    staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p):menu==='Pengelola')
      .map((p:any)=>teacher?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),
-   subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts,
+   subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts:attempts.filter(a=>completedIds.has(a.examId)),
    drafts:draftRows.map((r:any)=>({...JSON.parse(r.summary),id:r.id,form:{title:r.title},summaryOnly:true})).filter(inPeriod),
    exams:visibleExams.map((e:any)=>{
      const token=tokenById.get('shared-'+e.id);
@@ -585,13 +619,31 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
  if(kind==='gradeExam'){
    const exam=await get(key);
    if(!exam||exam._kind!=='exam'||exam.deletedAt||!inPeriod(exam)||!examPermission(staff,exam,'grade'))return missing();
-   const {results}=await db().prepare("SELECT id,exam_id,student_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,COALESCE(json_array_length(json_extract(data,'$.questionOrder')),json_array_length(data,'$.questions')) AS question_count,(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'') AS answered_count FROM attempts WHERE exam_id=?").bind(exam.id).all();
+   const questionSource="COALESCE(NULLIF(score_attempt.question_data,'null'),json_extract(score_attempt.data,'$.questions'))";
+   const [bank,{results}]=await Promise.all([
+     exam.bankId?db().prepare("SELECT "+scoreQuestionsSQL("score_bank.data,'$.questions'")+" AS scoring_questions FROM records AS score_bank WHERE id=? AND kind='bank'").bind(exam.bankId).first():null,
+     db().prepare("SELECT id,student_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,"
+       +scoreQuestionsSQL(questionSource)+" AS scoring_questions,json_extract(data,'$.answers') AS scoring_answers,json_extract(data,'$.grades') AS scoring_grades FROM attempts AS score_attempt WHERE exam_id=?").bind(exam.id).all(),
+   ]);
+   const bankQuestions=bank?{questions:JSON.parse(bank.scoring_questions||'[]')}:undefined;
+   const now=Date.now();
    const attempts=results.map((row:any)=>{
      const a=JSON.parse(row.summary);
-     if(a.status==='Mengerjakan'&&(!a.pausedAt||a.securityLocked)&&Date.now()>=a.deadline){
-       a.status='Dikumpulkan';a.timedOut=true;a.submittedAt=a.deadline;
+     const questions=JSON.parse(row.scoring_questions||'[]');
+     const answers=JSON.parse(row.scoring_answers||'{}')||{};
+     const cutoff=gradingCutoff(a,now);
+     if(cutoff!==undefined){
+       a.status='Dikumpulkan';a.timedOut=true;a.submittedAt=cutoff;
      }
-     return {...a,id:row.id,examId:row.exam_id,studentId:row.student_id,answeredCount:Number(row.answered_count)||0,questionCount:Number(row.question_count)||0};
+     let points;
+     if(a.status==='Dikumpulkan'&&questions.length){
+       const scoring={...a,questions,answers,grades:cutoff!==undefined?mark(questions,answers):JSON.parse(row.scoring_grades||'{}')||{}};
+       alignGradingKeys(scoring,bankQuestions);
+       a.graded=scoring.graded;
+       a.score=scoring.score;
+       points=gradingPoints(scoring.questions,answers,scoring.grades,scoring.graded||scoring.published);
+     }
+     return {...a,id:row.id,examId:exam.id,studentId:row.student_id,answeredCount:Object.values(answers).filter(Boolean).length,questionCount:questions.length,points};
    });
    return Response.json({examId:exam.id,attempts},{headers});
  }

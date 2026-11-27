@@ -23,6 +23,14 @@ function postgresQuery(source: string) {
     .replace("json_extract(data,'$.form.title')","(data::jsonb #>> '{form,title}')")
     .replace("json_each(records.data,'$.studentIds')","jsonb_array_elements_text(CASE WHEN jsonb_typeof(records.data::jsonb->'studentIds')='array' THEN records.data::jsonb->'studentIds' ELSE '[]'::jsonb END) AS enrollment(value)")
     .replace("(SELECT json_group_array(json_object('id',json_extract(value,'$.id'),'sourceId',json_extract(value,'$.sourceId'),'type',json_extract(value,'$.type'),'scope',json_extract(value,'$.scope'))) FROM json_each(records.data,'$.questions'))","(SELECT jsonb_agg(jsonb_build_object('id',q->'id','sourceId',q->'sourceId','type',q->'type','scope',q->'scope'))::text FROM jsonb_array_elements(NULLIF(records.data::jsonb->'questions','null'::jsonb)) AS items(q))")
+    .replace(/\(SELECT json_group_array\(json_object\((.*?)\)\) FROM json_each\((score_bank\.data,'\$\.questions'|COALESCE\(NULLIF\(score_attempt\.question_data,'null'\),json_extract\(score_attempt\.data,'\$\.questions'\)\))\)\)/g,(_match,fields:string,source:string)=>{
+      const questions=source.startsWith('score_bank')
+        ?"NULLIF(score_bank.data::jsonb->'questions','null'::jsonb)"
+        :"COALESCE(NULLIF(score_attempt.question_data::jsonb,'null'::jsonb),NULLIF(score_attempt.data::jsonb->'questions','null'::jsonb))";
+      const projection=fields.replace(/json_extract\(value,'\$\.([a-zA-Z]+)'\)/g,"q->'$1'");
+      return "(SELECT jsonb_agg(jsonb_build_object("+projection+"))::text FROM jsonb_array_elements("+questions+") AS items(q))";
+    })
+    .replace(/json_extract\(data,'\$\.(answers|grades)'\)(?= AS scoring_)/g,"(data::jsonb ->> '$1')")
     .replace("(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'')","(SELECT count(*) FROM jsonb_each_text(NULLIF(attempts.data::jsonb->'answers','null'::jsonb)) WHERE value<>'')")
     .replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
     .replace("json_array_length(json_extract(data,'$.questionOrder'))","jsonb_array_length(NULLIF((data::jsonb ->> 'questionOrder')::jsonb,'null'::jsonb))")
