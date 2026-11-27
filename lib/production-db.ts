@@ -32,6 +32,7 @@ function postgresQuery(source: string) {
       return "(SELECT jsonb_agg(jsonb_build_object("+projection+"))::text FROM jsonb_array_elements("+questions+") AS items(q))";
     })
     .replace(/json_extract\(data,'\$\.(answers|grades)'\)(?= AS scoring_)/g,"(data::jsonb ->> '$1')")
+    .replace(/json_extract\(((?:student_base|roster_student)\.data),'\$\.([a-zA-Z][a-zA-Z0-9]*)'\)/g,"($1::jsonb ->> '$2')")
     .replace("(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'')","(SELECT count(*) FROM jsonb_each_text(NULLIF(attempts.data::jsonb->'answers','null'::jsonb)) WHERE value<>'')")
     .replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
     .replace("json_array_length(json_extract(data,'$.questionOrder'))","jsonb_array_length(NULLIF((data::jsonb ->> 'questionOrder')::jsonb,'null'::jsonb))")

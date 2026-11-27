@@ -171,6 +171,51 @@ function matchesEnrollment(student:any,exam:any){
  return student.unit===exam.unit&&student.className===exam.className&&(student.year||'2026/2027')===(exam.year||'2026/2027');
 }
 async function participants(e:any){return (await studentsFor(e)).filter((student:any)=>matchesEnrollment(student,e));}
+async function examRosterRows(exams:any[],staff:any,details=false,additionalIds:string[]=[]){
+ if(!exams.length)return [];
+ const units=[...new Set(exams.map(e=>e.unit))];
+ const classNames=[...new Set(exams.map(e=>e.className))];
+ const selectedIds=[...new Set([...additionalIds,...exams.flatMap(e=>e.studentIds||[])])];
+ const placeholders=(values:unknown[])=>values.map(()=>'?').join(',');
+ const present=(alias:string)=>"COALESCE(CAST(json_extract("+alias+".data,'$.deletedAt') AS TEXT),'') IN ('','0','false')";
+ const semester2=period.semester===2;
+ const profilePrefix='semester2:'+period.year+':';
+ const source=semester2
+   ?"SELECT substr(student_base.id,?) AS id,student_base.data FROM records AS student_base WHERE student_base.kind='academic_profile' AND json_extract(student_base.data,'$.profileKind')='student' AND json_extract(student_base.data,'$.profileYear')=?"
+   :"SELECT student_base.id,COALESCE(profile.data,student_base.data) AS data FROM records AS student_base LEFT JOIN records AS profile ON profile.id=?||student_base.id AND profile.kind='student_year' WHERE student_base.kind='student' AND "+present('student_base');
+ const field=(name:string)=>"json_extract(roster_student.data,'$."+name+"')";
+ const projected=details?[field('name')+' AS name',field('nis')+" AS nis"]:[];
+ const eligible=field('className')+' IN ('+placeholders(classNames)+')'+(selectedIds.length?' OR roster_student.id IN ('+placeholders(selectedIds)+')':'');
+ const filters=[
+   present('roster_student'),
+   "COALESCE("+field('year')+",'2026/2027')=?",
+   field('unit')+' IN ('+placeholders(units)+')',
+   '('+eligible+')',
+ ];
+ if(!semester2)filters.push("COALESCE(CAST("+field('semester2Only')+" AS TEXT),'') IN ('','0','false')");
+ const query="SELECT roster_student.id,"+[field('unit')+' AS unit',field('className')+' AS class_name',...projected].join(',')
+   +" FROM ("+source+") AS roster_student WHERE "+filters.join(' AND ');
+ const {results}=await db().prepare(query).bind(...(semester2?[profilePrefix.length+1,period.year]:['student-year:'+period.year+':']),period.year,...units,...classNames,...selectedIds).all();
+ return results.map((row:any)=>({id:row.id,unit:row.unit,className:row.class_name,year:period.year,
+   ...(details?{name:row.name,nis:row.nis}:{})})).filter((student:any)=>staffDataScope(staff,student));
+}
+function enrollmentByExam(exams:any[],students:any[]){
+ const byId=new Map(students.map(s=>[s.id,s]));
+ const byClass=new Map<string,any[]>();
+ const classKey=(record:any)=>JSON.stringify([record.unit,record.className]);
+ for(const student of students){
+   const key=classKey(student);
+   const group=byClass.get(key);
+   if(group)group.push(student);
+   else byClass.set(key,[student]);
+ }
+ return new Map(exams.map(exam=>{
+   const pool=exam.participantsSelected||exam.studentIds?.length
+     ?[...new Set<string>(exam.studentIds||[])].map(id=>byId.get(id)).filter(Boolean)
+     :byClass.get(classKey(exam))||[];
+   return [exam.id,pool.filter(s=>matchesEnrollment(s,exam))];
+ }));
+}
 async function isExamParticipant(studentId:string,exam:any){
  const year=exam.year||'2026/2027';
  if(Number(exam.semester||1)===2){
@@ -480,14 +525,21 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
 
  return Response.json({student,studentPortal:true,studentMenu,demo,exams:schedules,attempts:selectedAttempts.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published&&(!studentMenu||resultsOnly)?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
 }
-async function monitoringProgress(staff:any,examId:string){
+async function monitoringProgress(staff:any,examId:string,withParticipants:boolean){
  const exam=await get(examId);
  if(!exam||exam._kind!=='exam'||exam.deletedAt||!inPeriod(exam)||!examPermission(staff,exam,'monitor')){
    return Response.json({error:'Jadwal tidak tersedia untuk monitoring.'},{status:403});
  }
- const {results}=await db().prepare(
+ const progressQuery=db().prepare(
    "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,COALESCE(json_array_length(json_extract(data,'$.questionOrder')),json_array_length(data,'$.questions')) AS question_count,(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'') AS answered_count FROM attempts WHERE exam_id=?"
  ).bind(exam.id).all();
+ const [{results},roster,token]=await Promise.all([
+   progressQuery,
+   withParticipants?examRosterRows([exam],staff,true):[],
+   withParticipants&&examPermission(staff,exam,'token')
+     ?db().prepare("SELECT id FROM records WHERE id=? AND kind='shared_token'").bind('shared-'+exam.id).first()
+     :null,
+ ]);
  const now=Date.now();
  const attempts=results.map((row:any)=>{
    const attempt=JSON.parse(row.summary);
@@ -510,7 +562,9 @@ async function monitoringProgress(staff:any,examId:string){
      pausedAt,securityLocked,exitReason,resetCount:attempt.resetCount||0,actionNotes:attempt.actionNotes,
      answeredCount:Number(row.answered_count)||0,questionCount:Number(row.question_count)||0};
  });
- return Response.json({examId,attempts},{headers:{'Cache-Control':'no-store'}});
+ return Response.json({examId,attempts,...(withParticipants?{
+   students:roster.filter(s=>matchesEnrollment(s,exam)),tokenExpiresAt:token?Date.parse(exam.end):0,
+ }:{})},{headers:{'Cache-Control':'no-store'}});
 }
 function staffDataScope(staff:any,record:any){
  return staff.role==='Super Admin'||staff.unit===record.unit||staff.role==='Guru'&&(staff.assignments||[]).some((task:any)=>task.unit===record.unit);
@@ -539,10 +593,13 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  }
  const kinds=staffMenuRecords[menu];
  const scope=(x:any)=>staffDataScope(staff,x);
- const list=async(kind:string)=>kinds.includes(kind)?(await all(kind)).filter(scope):[];
+ const menuPermission:Record<string,string>={'Monitoring':'monitor','Token ujian':'token','Koreksi & nilai':'grade'};
+ const examAction=menuPermission[menu];
+ const compactRoster=!!examAction&&query.get('menuVersion')==='3';
+ const list=async(kind:string)=>kinds.includes(kind)&&(!compactRoster||kind==='exam')?(await all(kind)).filter(scope):[];
  const bankMenu=['Bank soal','Buat soal','Simulasi ujian'].includes(menu);
  const needsSources=menu==='Bank soal'||menu==='Buat soal';
- const needsShared=menu==='Token ujian'||menu==='Monitoring';
+ const needsShared=!compactRoster&&(menu==='Token ujian'||menu==='Monitoring');
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
  const [years,students,exams,classes,people,subjects,topics,logs,sharedRows,draftRows,loginAccounts]=await Promise.all([
@@ -553,17 +610,17 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    menu==='Pengelola'?authRecords('credential').then(rows=>rows.map((c:any)=>({staffId:c.staffId,username:c.username}))):[],
  ]);
  const visibleClasses=classesVisibleTo(staff,classes,exams);
- const teacherClasses=teacher?classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
+ const teacherClasses=teacher?compactRoster?(staff.homeroomClasses||[]):classesVisibleTo(staff,kinds.includes('class')?classes:await all('class'),exams):visibleClasses;
  const permittedExams=examsVisibleTo(staff,exams,teacherClasses);
  const navigation=teacher?teacherNavigation(staff,permittedExams):undefined;
  let visibleExams=kinds.includes('exam')?permittedExams:[];
- const menuPermission:Record<string,string>={'Monitoring':'monitor','Token ujian':'token','Koreksi & nilai':'grade'};
- const examAction=menuPermission[menu];
  if(examAction)visibleExams=visibleExams.filter(e=>examPermission(staff,e,examAction));
  if(menu==='Koreksi & nilai'){
    const now=Date.now();
    visibleExams=visibleExams.filter(e=>Date.parse(e.end)<=now);
  }
+ if(menu==='Token ujian')visibleExams=visibleExams.filter(e=>tokenScheduleOpen(e,Date.now()));
+ const enrolled=compactRoster?enrollmentByExam(visibleExams,await examRosterRows(visibleExams,staff)):null;
  const participantClasses=menu==='Buat soal'
    ?new Set(visibleExams.filter(e=>examPermission(staff,e,'bank')).map(e=>JSON.stringify([e.unit,e.className])))
    :new Set<string>();
@@ -594,7 +651,14 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const tokens=new Map<string,string>();
  if(menu==='Token ujian'){
    const now=Date.now();
-   visibleExams=visibleExams.filter(e=>tokenScheduleOpen(e,now));
+   if(compactRoster){
+     const ids=visibleExams.map(e=>'shared-'+e.id);
+     for(let offset=0;offset<ids.length;offset+=100){
+       const batch=ids.slice(offset,offset+100);
+       const {results}=await db().prepare("SELECT id,data FROM records WHERE kind=? AND id IN ("+batch.map(()=>'?').join(',')+")").bind('shared_token',...batch).all();
+       for(const row of results)tokenById.set(row.id,{...JSON.parse(row.data),id:row.id});
+     }
+   }
    const prepared=visibleExams.filter(e=>tokenById.has('shared-'+e.id));
    const started=prepared.filter(e=>Date.parse(e.start)<=now);
    const completed=new Set<string>();
@@ -609,8 +673,8 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
      for(const e of started){
        const ids=submitted.get(e.id);
        if(!ids?.size)continue;
-       const enrolled=students.filter(s=>matchesEnrollment(s,e));
-       if(enrolled.length&&enrolled.every(s=>ids.has(s.id)))completed.add(e.id);
+       const candidates=enrolled?.get(e.id)??students.filter(s=>matchesEnrollment(s,e));
+       if(candidates.length&&candidates.every(s=>ids.has(s.id)))completed.add(e.id);
      }
    }
    visibleExams=visibleExams.filter(e=>!completed.has(e.id));
@@ -627,7 +691,7 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    navigation,
    classes:visibleClasses.filter(belongsYear),
    students:menu==='Buat soal'?participantStudents:students.filter(belongsYear).filter((x:any)=>!teacher||
-     (examAction?visibleExams.some(e=>matchesEnrollment(x,e)):teacherClasses.some(c=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027')))),
+     (examAction?visibleExams.some(e=>matchesEnrollment(x,e)):teacherClasses.some((c:any)=>c.unit===x.unit&&c.name===x.className&&c.year===(x.year||'2026/2027')))),
    staffList:people.filter((p:any)=>p.role==='Guru'?belongsYear(p)&&(!teacher||p.id===staff.id):menu==='Pengelola')
      .map((p:any)=>teacher?{id:p.id,name:p.name,unit:p.unit,role:p.role,gender:p.gender,assignments:p.assignments,subject:p.subject}:p),
    subjects,topics:topics.filter(inPeriod),audit:logs,banks,attempts:[],
@@ -635,7 +699,8 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    exams:visibleExams.map((e:any)=>{
      const token=tokenById.get('shared-'+e.id);
      const questionSources=(sources.get(e.id)||bankById.get(e.bankId)?.questions||[]).map((q:any)=>q.sourceId||q.id);
-     return {...e,questionSources,tokenExpiresAt:token?Date.parse(e.end):0,...(menu==='Token ujian'?{sharedCode:tokens.get(e.id)}:{}),
+     const {studentIds,excludedStudentIds,instructions,duties,...schedule}=e;
+     return {...(compactRoster?schedule:e),questionSources,tokenExpiresAt:token?Date.parse(e.end):0,...(enrolled?{participantCount:enrolled.get(e.id)?.length??0}:{}),...(menu==='Token ujian'?{sharedCode:tokens.get(e.id)}:{}),
        canMonitor:examPermission(staff,e,'monitor'),canManageAttempt:examPermission(staff,e,'monitor'),canProctor:examPermission(staff,e,'token'),
        canGrade:examPermission(staff,e,'grade'),canWrite:examPermission(staff,e,'bank')};
    }),
@@ -697,7 +762,11 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
      const {questionKeyOverrides,...summary}=a;
      return {...summary,id:row.id,examId:exam.id,studentId:row.student_id,answeredCount:Object.values(answers).filter(Boolean).length,questionCount:questions.length,points};
    });
-   return Response.json({examId:exam.id,attempts},{headers});
+   const attemptedIds=new Set<string>(attempts.map(a=>a.studentId));
+   const roster=query.get('menuVersion')==='3'
+     ?(await examRosterRows([exam],staff,true,[...attemptedIds])).filter(s=>matchesEnrollment(s,exam)||attemptedIds.has(s.id))
+     :undefined;
+   return Response.json({examId:exam.id,attempts,students:roster},{headers});
  }
  if(kind==='grade'){
    const row:any=await db().prepare('SELECT id,exam_id FROM attempts WHERE id=?').bind(key).first();
@@ -726,9 +795,9 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
 
 
 async function GET(req:Request){try{
- const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'');
+ const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'',query.get('withParticipants')==='1');
  if(staff.role==='Siswa')return await studentOverview(staff.studentId,query.get('studentMenu'));
- const staffScope=(!demo||query.get('menuVersion')==='2')&&['Super Admin','Admin Unit','Guru'].includes(staff.role);
+ const staffScope=(!demo||['2','3'].includes(query.get('menuVersion')||''))&&['Super Admin','Admin Unit','Guru'].includes(staff.role);
  const menu=query.get('menu');
  const detail=query.get('detail');
  if(staff.role==='Guru'&&(menu&&teacherExamMenus.includes(menu)||detail&&['bank','grade','gradeExam'].includes(detail)||!menu&&!detail&&query.get('view')!=='operations')){

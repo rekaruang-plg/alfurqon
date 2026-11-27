@@ -17,6 +17,7 @@ type Exam = {
   status?: string;
   canProctor: boolean;
   canMonitor?: boolean;
+  participantCount?: number;
   participantsSelected?: boolean;
   studentIds?: string[];
   excludedStudentIds?: string[];
@@ -151,7 +152,7 @@ export default function ExamTokenList(props: Props) {
             ? (exam.studentIds || []).filter(id => enrollment.visibleIds.has(id))
             : enrollment.byClass.get(JSON.stringify([exam.unit, exam.className, exam.year || '2026/2027'])) || [];
           const excluded = new Set(exam.excludedStudentIds);
-          const participants = ids.filter(id => !excluded.has(id)).length;
+          const participants = exam.participantCount??ids.filter(id => !excluded.has(id)).length;
           return <li key={exam.id} className="token-schedule-row">
             <div className="token-exam">
               <h3>{exam.title}</h3>
