@@ -19,6 +19,7 @@ assert.match(postgresQuery("SELECT (SELECT json_group_array(json_extract(value,'
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
 const examMode=evaluate(fs.readFileSync('lib/teacher-exam-mode.ts','utf8'),{});
 let teacherModeEnabled=false;
+let sharedAttemptQuestions=false;
 const splitAttemptQuestions=process.env.CBT_TEST_SPLIT_ATTEMPT_QUESTIONS!=='0';
 const settings=evaluate(fs.readFileSync('lib/question-settings.ts','utf8'),{});
 const sdProfiles=evaluate(strip(fs.readFileSync('lib/sd-subject-profiles.ts','utf8')),settings);
@@ -35,7 +36,7 @@ const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
-const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),SPLIT_ATTEMPT_QUESTIONS:splitAttemptQuestions,get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
+const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),SPLIT_ATTEMPT_QUESTIONS:splitAttemptQuestions,get SHARED_ATTEMPT_QUESTIONS(){return sharedAttemptQuestions;},get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
 async function seedYearSubjects(year){for(const unit of ['SD','SMP','SMA'])for(const name of simulation.subjectCatalog[unit]||[])await call('saveSubject',{period:{year,semester:1},data:{name,unit,grades:unit==='SD'?['5','6']:['1','2','3']}});}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
@@ -555,17 +556,35 @@ console.log('PASS: evaluation teacher assignment persistence/access scope, teach
 await loginCard(ownerCard);const period={year:'2026/2027',semester:1};
 await call('saveClass',{period,data:{name:'6 UNIQUE',unit:'SD',grade:'6'}});
 await call('importStudents',{period,rows:Array.from({length:30},(_,i)=>({Nama:'Unique '+i,NIS:'UNIQ'+i,Unit:'SD',Kelas:'6 UNIQUE',JK:'L'})),commit:true});
-const questions=Array.from({length:9},(_,i)=>({id:'unique-q'+i,type:'PG',text:'Question '+i,options:['A','B'],key:'0',points:10,mode:'TEKS',...(i<3?{stimulusId:'story',stimulus:'Shared story'}:{})}));
+const questions=Array.from({length:9},(_,i)=>({id:'unique-q'+i,type:'PG',text:'Question '+i,options:['A','B'],key:'0',points:10,mode:'TEKS',...(i===4?{images:[imageFixture]}:{}),...(i<3?{stimulusId:'story',stimulus:'Shared story'}:{})}));
 await call('saveBank',{period,data:{title:'Unique order QA',unit:'SD',subject:'Matematika',questions}});
 const ub=(await state(period)).banks.find(b=>b.title==='Unique order QA');
 await call('saveExam',{period,data:{title:'Unique order QA',unit:'SD',className:'6 UNIQUE',grade:'6',subject:'Matematika',bankId:ub.id,duration:60,start:new Date(Date.now()-1000).toISOString(),end:new Date(Date.now()+3600000).toISOString()}});
 const ue=(await state(period)).exams.find(e=>e.title==='Unique order QA'),tokens=(await call('generate',{period,examId:ue.id})).issued;
 const first=await call('enter',{token:tokens[0].token});
 sql.prepare("UPDATE attempts SET data=json_remove(data,'$.questionOrder') WHERE id=?").run(first.id);
+sharedAttemptQuestions=true;
 const attempts=[first,...await Promise.all(tokens.slice(1).map(t=>call('enter',{token:t.token})))];
+sharedAttemptQuestions=false;
+for(const a of attempts.slice(1)){
+ const stored=getAttemptStorage(a.id);
+ const progress=JSON.parse(stored.data);
+ assert.equal(stored.question_data,null);
+ assert.equal(progress.sharedQuestions,true);
+ assert.deepEqual(JSON.parse(progress.questionOrder),a.questions.map(q=>q.id));
+ assert(!('questions' in progress)&&!stored.data.includes(imageFixture));
+ assert(a.questions.find(q=>q.id==='unique-q4').images.includes(imageFixture));
+}
 assert.equal(new Set(attempts.map(a=>JSON.stringify(a.questions.map(q=>q.id)))).size,30);
 for(const a of attempts){assert.equal(a.questions.length,9);const i=a.questions.findIndex(q=>q.id==='unique-q0');assert.equal(a.questions[i+1].id,'unique-q1');assert.equal(a.questions[i+2].id,'unique-q2');assert(!a.questions.some(q=>'key' in q));}
 await call('answer',{token:tokens[1].token,questionId:'unique-q4',value:'0'});
+const sharedStudentId=JSON.parse(getAttemptStorage(attempts[1].id).data).studentId;
+const sharedStudentCard=(await call('accountCards',{period,kind:'student',id:sharedStudentId})).cards[0];
+await loginCard(sharedStudentCard);
+const sharedSave=await call('saveAnswers',{token:tokens[1].token,answers:{'unique-q4':'0'}});
+assert.equal(sharedSave.compact,true);
+assert.equal(sharedSave.id,attempts[1].id);
+await loginCard(ownerCard);
 const resumed=await call('enter',{token:tokens[1].token});assert.deepEqual(resumed.questions,attempts[1].questions);assert.equal(resumed.answers['unique-q4'],'0');
 const legacy=await call('enter',{token:tokens[0].token});assert.deepEqual(legacy.questions,first.questions);
 // Correction uses the frozen package order, even after the working bank is reordered.
@@ -598,7 +617,29 @@ sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(
  retakeAttempt,originalAttempt.studentId,retakeId,'unique-order-resumed-token',
  JSON.stringify({...originalAttempt,id:retakeAttempt,examId:retakeId,questions:shuffled}));
 assert.deepEqual((await correction(retakeAttempt)).questions.map(q=>q.id),packageOrder);
+// A revised key stays attached to a published grade without copying the questions.
+await writeRecord(ub.id,'bank',{...originalBank,questions:originalBank.questions.map(q=>q.id==='unique-q4'?{...q,key:'1'}:q)});
+await call('grade',{period,id:attempts[1].id,grades:{}});
+await call('publish',{period,id:attempts[1].id});
 await writeRecord(ub.id,'bank',originalBank);
+const review=await correction(attempts[1].id);
+assert.equal(review.questions.find(q=>q.id==='unique-q4').key,'1');
+assert.equal(review.grades['unique-q4'],0);
+const publishedStorage=getAttemptStorage(attempts[1].id);
+assert.equal(publishedStorage.question_data,null);
+assert.equal(JSON.parse(publishedStorage.data).questionKeyOverrides['unique-q4'].key,'1');
+assert(!publishedStorage.data.includes(imageFixture));
+await writeRecord(ue.id,'exam',{...await record(ue.id),end:new Date(Date.now()-1000).toISOString()});
+sql.prepare("UPDATE attempts SET data=json_set(data,'$.deadline',0) WHERE exam_id=? AND json_extract(data,'$.status')='Mengerjakan'").run(ue.id);
+const gradeExamParams=new URLSearchParams({year:period.year,semester:'1',detail:'gradeExam',id:ue.id});
+const gradeExam=await routes.GET(new Request('https://cbt.test/api/cbt?'+gradeExamParams,{headers:{cookie}}));
+assert.equal(gradeExam.status,200);
+const classResult=(await gradeExam.json()).attempts.find(a=>a.id===attempts[1].id);
+assert.deepEqual(classResult.points,{earned:0,maximum:90,provisional:false});
+assert(!('questionKeyOverrides' in classResult));
+const compactBackup=await call('backup');
+assert(compactBackup.records.some(r=>r.id==='snapshot-'+ue.id&&r.data.includes(imageFixture)));
+assert(!compactBackup.attempts.find(a=>a.id===attempts[1].id).data.includes(imageFixture));
 console.log('PASS: 30 simultaneous participants receive distinct persisted permutations, shared passage groups stay together, legacy order excluded, resume and answer identity preserved.');
 }
 

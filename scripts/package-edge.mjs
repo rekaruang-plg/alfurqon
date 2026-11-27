@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 const seen=new Map();
 const splitAttemptQuestions=process.argv.includes('--split-attempt-questions');
+const sharedAttemptQuestions=process.argv.includes('--share-attempt-questions');
 function visit(file){
  const name=file.replace(/\.ts$/,'.js');if(seen.has(name)) return name;
  let src=fs.readFileSync(file,'utf8');
@@ -17,6 +18,7 @@ function visit(file){
      .replace('return process.env.TOKEN_VAULT_KEY','return loadVault()')
      .replace("process.env.CBT_TEACHER_EXAM_MODE==='1'","true")
      .replace("process.env.CBT_SPLIT_ATTEMPT_QUESTIONS==='1'","(Deno.env.get('CBT_SPLIT_ATTEMPT_QUESTIONS') ?? '"+(splitAttemptQuestions?'1':'0')+"')==='1'")
+     .replace("process.env.CBT_SHARED_ATTEMPT_QUESTIONS==='1'","(Deno.env.get('CBT_SHARED_ATTEMPT_QUESTIONS') ?? '"+(sharedAttemptQuestions?'1':'0')+"')==='1'")
      .replace(/process\.env\.(WORD_CONVERTER_\w+)/g,"Deno.env.get('$1')");
  }
  src=src.replace(/process\.env\.VERCEL/g,"'1'");
