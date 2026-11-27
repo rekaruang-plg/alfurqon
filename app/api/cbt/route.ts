@@ -399,7 +399,9 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const list=async(kind:string)=>kinds.includes(kind)?(await all(kind)).filter(scope):[];
  const bankMenu=['Bank soal','Buat soal','Simulasi ujian'].includes(menu);
  const needsSources=menu==='Bank soal'||menu==='Buat soal';
- const needsAttempts=['Token ujian','Monitoring','Koreksi & nilai'].includes(menu);
+ // The token list uses schedule and token metadata. Per-student progress
+ // belongs to Monitoring, which opens when the operator selects Peserta.
+ const needsAttempts=['Monitoring','Koreksi & nilai'].includes(menu);
  const needsShared=menu==='Token ujian'||menu==='Monitoring';
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
@@ -428,13 +430,9 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    .map((b:any)=>b.deletedAt?{...b,archived:true}:b);
  const sources=new Map<string,any[]>();
  const attempts:any[]=[];
- const now=Date.now();
- const detailExams=menu==='Token ujian'
-   ?visibleExams.filter(e=>examPermission(staff,e,'token')&&Date.parse(e.end)>now&&wibDayStart(Date.parse(e.start))===wibDayStart(now))
-   :visibleExams;
  if(needsAttempts||needsSources){
-   for(let offset=0;offset<detailExams.length;offset+=100){
-     const ids=detailExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
+   for(let offset=0;offset<visibleExams.length;offset+=100){
+     const ids=visibleExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
      if(!ids.length)continue;
      const marks=ids.map(()=>'?').join(',');
      if(needsSources){
