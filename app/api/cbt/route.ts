@@ -42,6 +42,10 @@ async function currentTeacherExamMode(staff:any){
    .filter((exam:any)=>exam.status==='Aktif'&&!exam.deletedAt&&!exam.simulation&&typeof exam.start==='string'&&typeof exam.end==='string')
    .filter((exam:any)=>Date.parse(exam.start)<=now+day+teacherExamLead&&Date.parse(exam.end)>=today-day)
    .map((exam:any)=>({...exam,proctor:(exam.duties||[]).some((d:any)=>d.staffId===staff.id&&d.role==='proctor')}));
+ // An active scheduled window already requires exam mode. Consult attempt
+ // deadlines after it ends, when an extension can keep the mode active.
+ const scheduledMode=teacherExamWindow(exams,now);
+ if(scheduledMode)return scheduledMode;
  const official=new Map<string,number>();
  const needsExtensionCheck=exams.filter((exam:any)=>Date.parse(exam.start)<=now&&Date.parse(exam.end)<=now+teacherExamGrace);
  for(let offset=0;offset<needsExtensionCheck.length;offset+=100){

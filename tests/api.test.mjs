@@ -894,6 +894,11 @@ assert(monitorRead&&monitorRead.query.includes("'$.answers'"),'Monitoring counts
  await writeRecord('mode-qa-admin','staff',{name:'Admin Mode QA',role:'Admin Unit',email:'mode-qa-admin@test.invalid',unit});
  const schedule={unit,start:new Date(now+10*60000).toISOString(),end:new Date(now+60*60000).toISOString(),status:'Aktif',duties:[{staffId:teacher,role:'proctor'}]};
  await writeRecord(id,'exam',schedule);
+ const earlierId='mode-qa-extended-exam';
+ const earlier={...schedule,start:new Date(now-60000).toISOString(),end:new Date(now+60000).toISOString()};
+ await writeRecord(earlierId,'exam',earlier);
+ const extendedUntil=now+100*60000;
+ sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)').run(earlierId+'-attempt','mode-pupil',earlierId,'mode-extended-hash',JSON.stringify({deadline:extendedUntil,status:'Mengerjakan'}));
  const modeRead=async (query,status=200)=>{
    const response=await routes.GET(new Request('https://cbt.test/api/cbt?'+query));
    const result=await response.json();
@@ -903,8 +908,16 @@ assert(monitorRead&&monitorRead.query.includes("'$.answers'"),'Monitoring counts
  teacherModeEnabled=true;
  cookie='';
  user={email:'mode-qa-teacher@test.invalid',displayName:'Pengawas Mode QA'};
+ queryReads=[];
  assert.equal((await modeRead('entry=1')).entry.teacherExamMode.home,'Token ujian');
  assert.equal((await modeRead('activePeriod=1')).teacherExamMode.home,'Token ujian');
+ assert(!queryReads.some(read=>read.query.includes('AS pause_until')),'Scheduled exam mode must skip reading session deadlines');
+ const originalDateNow=Date.now;
+ try {
+   Date.now=()=>now+80*60000;
+   assert.equal((await modeRead('activePeriod=1')).teacherExamMode.until,extendedUntil+examMode.teacherExamGrace);
+ } finally { Date.now=originalDateNow; }
+ await writeRecord(earlierId,'exam',{...earlier,simulation:true});
  for(const menu of ['Buat soal','Bank soal','Koreksi & nilai'])await modeRead('menu='+encodeURIComponent(menu),423);
  await modeRead('menu=Token+ujian');await modeRead('menu=Monitoring');await modeRead('menu=Jadwal+ujian');
  await modeRead('detail=bank&id=any-package',423);
