@@ -18,6 +18,7 @@ assert.match(postgresQuery(compactSaveSQL),/\|\| \$1::text::jsonb.*\|\| \$4::tex
 const policy=evaluate(strip(fs.readFileSync('lib/review-policy.ts','utf8')),{});
 const examMode=evaluate(fs.readFileSync('lib/teacher-exam-mode.ts','utf8'),{});
 let teacherModeEnabled=false;
+const splitAttemptQuestions=process.env.CBT_TEST_SPLIT_ATTEMPT_QUESTIONS!=='0';
 const settings=evaluate(fs.readFileSync('lib/question-settings.ts','utf8'),{});
 const sdProfiles=evaluate(strip(fs.readFileSync('lib/sd-subject-profiles.ts','utf8')),settings);
 const model=evaluate(strip(fs.readFileSync('lib/model.ts','utf8')),policy);
@@ -33,15 +34,27 @@ const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
-const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
+const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),SPLIT_ATTEMPT_QUESTIONS:splitAttemptQuestions,get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
 async function seedYearSubjects(year){for(const unit of ['SD','SMP','SMA'])for(const name of simulation.subjectCatalog[unit]||[])await call('saveSubject',{period:{year,semester:1},data:{name,unit,grades:unit==='SD'?['5','6']:['1','2','3']}});}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
 assert.equal((await state()).needsSetup,true);await call('setup');await call('setup',{},400);
 let data=await state();assert.equal(data.students.length,4);const exam=data.exams[0],bank=data.banks[0];
+const imageFixture='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPgkAAAAASUVORK5CYII=';
+if(splitAttemptQuestions){
+ bank.questions[0].images=[imageFixture];
+ await writeRecord(bank.id,'bank',bank);
+}
 const issued=(await call('generate',{examId:exam.id})).issued;assert.equal(issued.length,4);assert.equal((await call('generate',{examId:exam.id})).issued.length,0);
 const token=issued[0].token;let a=await call('enter',{token});assert.equal(a.questions.length,4);assert(a.questions.every(q=>!('key' in q)));const order=a.questions.map(q=>q.id).join();const deadline=a.deadline;
+const getAttemptStorage=id=>sql.prepare('SELECT data,question_data FROM attempts WHERE id=?').get(id);
+const startedStorage=getAttemptStorage(a.id);
+if(splitAttemptQuestions){
+ assert(!('questions' in JSON.parse(startedStorage.data)));
+ assert(JSON.parse(startedStorage.question_data).some(q=>q.images?.includes(imageFixture)));
+}
 for(const q of bank.questions)await call('answer',{token,questionId:q.id,value:q.type==='PG'?q.key:'48 cm²',flags:[]});
+assert.equal(getAttemptStorage(a.id).question_data,startedStorage.question_data);
 a=await call('enter',{token});assert.equal(a.questions.map(q=>q.id).join(),order);assert.equal(a.deadline,deadline);assert.equal(Object.keys(a.answers).length,4);assert.equal(a.score,null);
 await call('submit',{token},400);sql.prepare("UPDATE attempts SET data=json_set(data,'$.submitAfter',0) WHERE id=?").run(a.id);const submitted=await call('submit',{token,compact:true});assert.equal(submitted.compact,true);assert.equal(submitted.id,a.id);assert.equal(submitted.status,'Dikumpulkan');assert(!('questions' in submitted)&&!('answers' in submitted));assert.equal((await call('submit',{token,compact:true})).status,'Dikumpulkan');data=await state();let result=data.attempts.find(r=>r.id===a.id);assert.equal(result.status,'Dikumpulkan');await call('publish',{id:a.id},400);
 const grades=Object.fromEntries(result.questions.map(q=>[q.id,q.points]));await call('grade',{id:a.id,grades:{...grades,extra:9999},feedback:'Bagus'});await call('publish',{id:a.id});assert.equal((await call('enter',{token})).score,100);await call('grade',{id:a.id,grades},400);
@@ -88,7 +101,16 @@ await call('saveClass',{data:{name:'6B',grade:'6',unit:'SD',year:'2026/2027'}});
 // Correction-only teacher may publish assigned results under revised policy.
 sql.prepare("UPDATE attempts SET data=json_set(data,'$.deadline',0) WHERE id=?").run(fresh.id);await call('submit',{token:t3,session:'22222222-2222-4222-a222-222222222222'});user={email:'teacher@example.test',displayName:'Guru'};await call('grade',{id:fresh.id,grades:Object.fromEntries(fresh.questions.map(q=>[q.id,q.points]))});await call('publish',{id:fresh.id});user={email:'qa@example.test',displayName:'QA Admin'};
 // Backup restore into an empty database preserves ids, answers, and counts.
-const backup=await call('backup');const restored=new DatabaseSync(':memory:');restored.exec(fs.readFileSync('drizzle/0000_chemical_la_nuit.sql','utf8'));for(const r of backup.records)restored.prepare('INSERT INTO records(id,kind,data,version) VALUES(?,?,?,?)').run(r.id,r.kind,r.data,r.version);for(const r of backup.attempts)restored.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data,version) VALUES(?,?,?,?,?,?)').run(r.id,r.student_id,r.exam_id,r.token_hash,r.data,r.version);assert.equal(restored.prepare('SELECT COUNT(*) n FROM attempts').get().n,backup.attempts.length);assert.equal(restored.prepare('SELECT data FROM attempts WHERE id=?').get(fresh.id).data,sql.prepare('SELECT data FROM attempts WHERE id=?').get(fresh.id).data);
+const backup=await call('backup');
+if(splitAttemptQuestions){
+ const exported=backup.attempts.find(row=>row.id===a.id);
+ assert(!('question_data' in exported));
+ assert(JSON.parse(exported.data).questions.some(q=>q.images?.includes(imageFixture)));
+}
+const restored=new DatabaseSync(':memory:');restored.exec(fs.readFileSync('drizzle/0000_chemical_la_nuit.sql','utf8'));for(const r of backup.records)restored.prepare('INSERT INTO records(id,kind,data,version) VALUES(?,?,?,?)').run(r.id,r.kind,r.data,r.version);for(const r of backup.attempts)restored.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data,version) VALUES(?,?,?,?,?,?)').run(r.id,r.student_id,r.exam_id,r.token_hash,r.data,r.version);assert.equal(restored.prepare('SELECT COUNT(*) n FROM attempts').get().n,backup.attempts.length);const storage=getAttemptStorage(fresh.id);
+const savedResult=JSON.parse(storage.data);
+if(storage.question_data!=null)savedResult.questions=JSON.parse(storage.question_data);
+assert.deepEqual(JSON.parse(restored.prepare('SELECT data FROM attempts WHERE id=?').get(fresh.id).data),savedResult);
 // Demo accounts see separate tables and cannot read real tokens or students.
 sql.prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?)').run('demo-admin','staff',JSON.stringify({name:'Demo',email:'demo@test.invalid',role:'Super Admin',unit:'Semua',demo:true}));user={email:'demo@test.invalid',displayName:'Demo'};const demoState=await state();assert.equal(demoState.demo,true);assert.equal(demoState.students.length,0);assert.equal(demoState.exams.length,0);await call('listTokens',{examId:exam.id},400);await call('backup',{},400);const ds=await call('startSimulation',{bankId:demoState.banks[0].id});assert(ds.token.startsWith('DEMO-'));const da=await call('enter',{token:ds.token});assert.equal(da.status,'Mengerjakan');assert.equal((await state()).exams.length,1);user={email:'qa@example.test',displayName:'QA Admin'};assert(!(await state()).exams.some(x=>x.id===ds.examId));
 console.log('PASS: confirmation, session isolation/release, extra time, frozen snapshot, Excel validation, publication permission, backup restoration, isolated demo tables.');
@@ -189,7 +211,8 @@ await call('saveAnswers',{token:private1,answers:{unknown:'invalid'}},400);
 await call('saveAnswers',{token:private1,answers:{cx:'invalid-session'},session:'33333333-3333-4333-a333-333333333333'},400);
 const savedBeforeResume=JSON.parse(sql.prepare('SELECT data FROM attempts WHERE id=?').get(started1.id).data);
 assert.deepEqual(savedBeforeResume.flags,['cx']);assert.equal(savedBeforeResume.answers.cx,'0,1,2');
-assert.equal(savedBeforeResume.questions.length,started1.questions.length);
+const savedQuestionData=getAttemptStorage(started1.id).question_data;
+assert.equal((savedQuestionData==null?savedBeforeResume.questions:JSON.parse(savedQuestionData)).length,started1.questions.length);
 const compactPulse=await call('heartbeat',{token:private1,compact:true});
 assert.equal(compactPulse.compact,true);assert.equal(compactPulse.id,started1.id);
 assert.equal(compactPulse.questions,undefined);
