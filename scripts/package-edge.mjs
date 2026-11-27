@@ -3,6 +3,7 @@ import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
 const seen=new Map();
+const splitAttemptQuestions=process.argv.includes('--split-attempt-questions');
 function visit(file){
  const name=file.replace(/\.ts$/,'.js');if(seen.has(name)) return name;
  let src=fs.readFileSync(file,'utf8');
@@ -15,7 +16,8 @@ function visit(file){
      .replace('let pool:',"let vault:Promise<string>|undefined;function loadVault(){return vault??=(async()=>{const [row]=await connection().unsafe(\"select value from cbt.runtime_secrets where name='token-vault'\");if(!/^[a-f0-9]{64}$/.test(row?.value??''))throw Error('Vault unavailable');return row.value;})().catch(error=>{vault=undefined;throw error;});}\nlet pool:")
      .replace('return process.env.TOKEN_VAULT_KEY','return loadVault()')
      .replace("process.env.CBT_TEACHER_EXAM_MODE==='1'","true")
-     .replace(/process\.env\.(WORD_CONVERTER_\w+|CBT_SPLIT_ATTEMPT_QUESTIONS)/g,"Deno.env.get('$1')");
+     .replace("process.env.CBT_SPLIT_ATTEMPT_QUESTIONS==='1'","(Deno.env.get('CBT_SPLIT_ATTEMPT_QUESTIONS') ?? '"+(splitAttemptQuestions?'1':'0')+"')==='1'")
+     .replace(/process\.env\.(WORD_CONVERTER_\w+)/g,"Deno.env.get('$1')");
  }
  src=src.replace(/process\.env\.VERCEL/g,"'1'");
  let output=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
