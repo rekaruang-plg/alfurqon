@@ -645,6 +645,16 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
    if(!['Token ujian','Monitoring','Koreksi & nilai'].includes(menu))assert(queryReads.every(row=>!row.query.includes('FROM attempts')),menu);
  }
  const activity=await read({menu:'Riwayat aktivitas'});
+ const today=examMode.wibDayStart(Date.now());
+ const day=24*60*60_000;
+ const tokenExam=await record(examId);
+ await writeRecord('token-today','exam',{...tokenExam,id:'token-today',start:new Date(today).toISOString(),end:new Date(today+day).toISOString()});
+ await writeRecord('token-yesterday','exam',{...tokenExam,id:'token-yesterday',start:new Date(today-day).toISOString(),end:new Date(today).toISOString()});
+ queryReads=[];
+ await read({menu:'Token ujian'});
+ const tokenAttemptReads=queryReads.filter(read=>read.query.includes('FROM attempts')).flatMap(read=>read.values);
+ assert(tokenAttemptReads.includes('token-today'));
+ assert(!tokenAttemptReads.includes('token-yesterday'));
  assert(activity.audit.length>0&&activity.audit.length<=50);
  assert(activity.audit.every((row,i)=>i===0||activity.audit[i-1].at>=row.at));
  const bank=await read({menu:'Bank soal'});

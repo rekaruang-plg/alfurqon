@@ -424,9 +424,13 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    .map((b:any)=>b.deletedAt?{...b,archived:true}:b);
  const sources=new Map<string,any[]>();
  const attempts:any[]=[];
+ const now=Date.now();
+ const detailExams=menu==='Token ujian'
+   ?visibleExams.filter(e=>examPermission(staff,e,'token')&&Date.parse(e.end)>now&&wibDayStart(Date.parse(e.start))===wibDayStart(now))
+   :visibleExams;
  if(needsAttempts||needsSources){
-   for(let offset=0;offset<visibleExams.length;offset+=100){
-     const ids=visibleExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
+   for(let offset=0;offset<detailExams.length;offset+=100){
+     const ids=detailExams.slice(offset,offset+100).filter((e:any)=>menu!=='Koreksi & nilai'||examPermission(staff,e,'grade')).map((e:any)=>e.id);
      if(!ids.length)continue;
      const marks=ids.map(()=>'?').join(',');
      if(needsSources){
