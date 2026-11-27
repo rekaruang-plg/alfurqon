@@ -175,12 +175,13 @@ async function prepareSharedToken(e:any){
 }
 function tokenScheduleOpen(e:any,now:number){
  const start=Date.parse(e.start);
- return e.status==='Aktif'&&Date.parse(e.end)>now&&(start<=now||wibDayStart(start)===wibDayStart(now));
+ const end=Date.parse(e.end);
+ return e.status==='Aktif'&&end>start&&end>now;
 }
-async function roster(e:any){
+async function roster(e:any,freezeQuestions=true){
  const pupils=await participants(e);
  if(!pupils.length)fail('Tidak ada peserta yang dipilih untuk ujian ini.');
- await freezeExam(e);
+ if(freezeQuestions)await freezeExam(e);
  const {results}=await db().prepare("SELECT id,student_id,json_extract(data,'$.status') AS status,json_extract(data,?) AS requires_login FROM attempts WHERE exam_id=?").bind('$.requiresLogin',e.id).all();
  const existing=new Map(results.map(row=>[row.student_id,row]));
  for(const st of pupils){
@@ -533,8 +534,19 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
    const started=prepared.filter(e=>Date.parse(e.start)<=now);
    const completed=new Set<string>();
    if(started.length){
-     const rows=await db().prepare("SELECT exam_id,COUNT(*) AS total,SUM(CASE WHEN json_extract(data,'$.status')='Dikumpulkan' THEN 1 ELSE 0 END) AS submitted FROM attempts WHERE exam_id IN ("+started.map(()=>'?').join(',')+") GROUP BY exam_id").bind(...started.map(e=>e.id)).all();
-     for(const row of rows.results)if(Number(row.total)>0&&Number(row.total)===Number(row.submitted))completed.add(row.exam_id);
+     const rows=await db().prepare("SELECT exam_id,student_id FROM attempts WHERE exam_id IN ("+started.map(()=>'?').join(',')+") AND json_extract(data,'$.status')='Dikumpulkan'").bind(...started.map(e=>e.id)).all();
+     const submitted=new Map<string,Set<string>>();
+     for(const row of rows.results){
+       let ids=submitted.get(row.exam_id);
+       if(!ids)submitted.set(row.exam_id,ids=new Set());
+       ids.add(row.student_id);
+     }
+     for(const e of started){
+       const ids=submitted.get(e.id);
+       if(!ids?.size)continue;
+       const enrolled=students.filter(s=>matchesEnrollment(s,e));
+       if(enrolled.length&&enrolled.every(s=>ids.has(s.id)))completed.add(e.id);
+     }
    }
    visibleExams=visibleExams.filter(e=>!completed.has(e.id));
    for(const e of prepared){
@@ -777,7 +789,21 @@ if(staff.role==='Siswa'){
  const resumeRow:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(staff.studentId,e.id).first();const resumed=resumeRow?readAttempt(resumeRow):null;const canResume=resumed?.status==='Mengerjakan'&&(resumed.pausedAt||resumed.deadline>Date.now());const shared=await get('shared-'+e.id);if(shared){if(await hash(String(b.code||'').trim().toUpperCase())!==await hash(await readSharedToken(e.id,shared)))fail('Token ujian tidak sesuai. Periksa kode yang diberikan pengawas.');if(!canResume&&(e.status!=='Aktif'||Date.now()<Date.parse(e.start)||Date.now()>=Date.parse(e.end)))fail('Jadwal ujian belum dimulai atau sudah berakhir.');}
  else if(e.tokenMode==='shared')fail('Pengawas belum menyiapkan token ujian.');
  if(resumed){await settleAttempt(resumed);if(resumed.status==='Dikumpulkan'&&!resumed.published)fail('Ujian sudah selesai dan jawaban telah dikumpulkan.');}
- const row:any=await db().prepare('SELECT * FROM attempts WHERE student_id=? AND exam_id=?').bind(staff.studentId,e.id).first();if(!row)fail('Peserta belum disiapkan pengawas.');const a={...JSON.parse(row.data),version:row.version},v=await get('vault-'+a.id);if(!v)fail('Minta pengawas memperbarui token.');if(a.status==='Mengerjakan'&&a.strictExit&&!a.pausedAt)fail('Ujian sedang berjalan pada perangkat yang telah terikat. Hubungi pengawas untuk pindah perangkat.');return Response.json({token:await openToken(v,a.id,await env.TOKEN_VAULT_KEY)},{headers:{'Cache-Control':'no-store'}});
+ let attempt=resumed;
+ if(!attempt&&shared){
+   // Enrollment can change after the proctor prepares the code.
+   const findAttempt=()=>db().prepare('SELECT data,version FROM attempts WHERE student_id=? AND exam_id=?').bind(staff.studentId,e.id).first();
+   let row:any;
+   try{await issueToken({id:id(),studentId:staff.studentId,examId:e.id,status:'Belum mulai',answers:{},published:false,requiresLogin:true});}
+   catch(error){
+     row=await findAttempt();
+     if(!row)throw error;
+   }
+   row??=await findAttempt();
+   if(row)attempt=readAttempt(row);
+ }
+ if(!attempt)fail('Peserta belum disiapkan pengawas.');
+ const a=attempt,v=await get('vault-'+a.id);if(!v)fail('Minta pengawas memperbarui token.');if(a.status==='Mengerjakan'&&a.strictExit&&!a.pausedAt)fail('Ujian sedang berjalan pada perangkat yang telah terikat. Hubungi pengawas untuk pindah perangkat.');return Response.json({token:await openToken(v,a.id,await env.TOKEN_VAULT_KEY)},{headers:{'Cache-Control':'no-store'}});
 }
 if(demo&&(b.action==='setup'||b.action==='saveStaff'&&b.data?.role!=='Guru'))fail('Pengelolaan akun tidak tersedia di ruang demo.');
 if(b.action==='deleteYear'){
@@ -869,13 +895,13 @@ if(b.action==='generateShared'||b.action==='viewShared'){
  const e=await get(b.examId);
  if(!e||e._kind!=='exam'||e.deletedAt)fail('Jadwal tidak ditemukan.');
  requireExam(staff,e,'token');
- if(!tokenScheduleOpen(e,Date.now()))fail('Token tersedia untuk jadwal hari ini yang belum berakhir.');
+ if(!tokenScheduleOpen(e,Date.now()))fail('Token tersedia untuk jadwal aktif yang belum berakhir.');
  const existing=await get('shared-'+e.id);
  let token:string;
  if(existing)token=await readSharedToken(e.id,existing);
  else{
    if(b.action==='viewShared')fail('Token belum dibuat.');
-   await roster(e);
+   await roster(e,Date.now()>=Date.parse(e.start));
    if(e.tokenMode!=='shared')await put('exam',{...e,tokenMode:'shared'});
    const prepared=await prepareSharedToken(e);
    token=prepared.token;
