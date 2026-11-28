@@ -1225,6 +1225,12 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
  await writeRecord('mode-qa-admin','staff',{name:'Admin Mode QA',role:'Admin Unit',email:'mode-qa-admin@test.invalid',unit});
  const schedule={unit,start:new Date(now+10*60000).toISOString(),end:new Date(now+60*60000).toISOString(),status:'Aktif',duties:[{staffId:teacher,role:'proctor'}]};
  await writeRecord(id,'exam',schedule);
+ const offsetISO=ms=>new Date(ms+7*3600000).toISOString().slice(0,-1)+'+07:00';
+ await writeRecord('mode-qa-legacy','exam',{...schedule,start:offsetISO(now+15*60000),end:offsetISO(now+45*60000),duties:[]});
+ await writeRecord('mode-qa-old','exam',{...schedule,start:new Date(now-5*86400000).toISOString(),end:new Date(now-4*86400000).toISOString()});
+ await writeRecord('mode-qa-future','exam',{...schedule,start:new Date(now+4*86400000).toISOString(),end:new Date(now+5*86400000).toISOString()});
+ await writeRecord('mode-qa-inactive','exam',{...schedule,status:'Batal'});
+ await writeRecord('mode-qa-other-unit','exam',{...schedule,unit:'MODE-OTHER'});
  const earlierId='mode-qa-extended-exam';
  const earlier={...schedule,start:new Date(now-60000).toISOString(),end:new Date(now+60000).toISOString()};
  await writeRecord(earlierId,'exam',earlier);
@@ -1241,7 +1247,14 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
  user={email:'mode-qa-teacher@test.invalid',displayName:'Pengawas Mode QA'};
  queryReads=[];
  assert.equal((await modeRead('entry=1')).entry.teacherExamMode.home,'Token ujian');
+ queryReads=[];
  assert.equal((await modeRead('activePeriod=1')).teacherExamMode.home,'Token ujian');
+ const [modeQuery]=queryReads.filter(read=>read.values[0]==='exam');
+ const candidateIds=sql.prepare(modeQuery.query).all(...modeQuery.values).map(row=>row.id).sort();
+ assert.deepEqual(candidateIds,[id,earlierId,'mode-qa-legacy'].sort());
+ const productionModeSQL=postgresQuery(modeQuery.query);
+ assert(!productionModeSQL.includes('json_extract'));
+ assert.match(productionModeSQL,/->> 'start'.+NOT LIKE.+->> 'end'.+NOT LIKE/);
  assert(!queryReads.some(read=>read.query.includes('AS pause_until')),'Scheduled exam mode must skip reading session deadlines');
  const originalDateNow=Date.now;
  try {
@@ -1266,6 +1279,8 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
  await modeRead('menu=Koreksi+%26+nilai');
  user={email:'mode-qa-teacher@test.invalid',displayName:'Pengawas Mode QA'};
  await writeRecord(id,'exam',{...schedule,simulation:true});
+ assert.equal((await modeRead('activePeriod=1')).teacherExamMode.until,now+60*60000);
+ await writeRecord('mode-qa-legacy','exam',{...schedule,simulation:true});
  assert.equal((await modeRead('entry=1')).entry.teacherExamMode,undefined);
  await modeRead('menu=Bank+soal');
  teacherModeEnabled=false;
