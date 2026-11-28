@@ -34,9 +34,13 @@ const writeRecord=async(key,kind,data)=>sql.prepare('INSERT INTO records(id,kind
 const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8')),{record,records,writeRecord,authDB:()=>DB,...pw,...vault,env:{get TOKEN_VAULT_KEY(){return Promise.resolve('ab'.repeat(32));}}});
 const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{DB},getChatGPTUser:async()=>null,...pw});
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
-const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...authlib,...pw,...model,standardPassword:generated.standardPassword});
+const operationLogs=[];
+const telemetry=evaluate(fs.readFileSync('lib/operation-telemetry.ts','utf8'),{
+ performance,Error,console:{info:line=>operationLogs.push(JSON.parse(line))},
+});
+const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...telemetry,...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
-const routes=evaluate(source,{sameOrigin,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),SPLIT_ATTEMPT_QUESTIONS:splitAttemptQuestions,get SHARED_ATTEMPT_QUESTIONS(){return sharedAttemptQuestions;},get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
+const routes=evaluate(source,{sameOrigin,...telemetry,env:{DB,TOKEN_VAULT_KEY:'ab'.repeat(32),SPLIT_ATTEMPT_QUESTIONS:splitAttemptQuestions,get SHARED_ATTEMPT_QUESTIONS(){return sharedAttemptQuestions;},get TEACHER_EXAM_MODE(){return teacherModeEnabled;}},...examMode,actor:async req=>{if(req?.headers.get('cookie'))return authlib.staffActor(req);if(!user)throw Error('Login diperlukan');const staff=sql.prepare("SELECT * FROM records WHERE kind IN ('staff','student_identity')").all().map(r=>({...JSON.parse(r.data),id:r.id,version:r.version})).find(s=>s.email===user.email);if(staff?.disabled)throw Error('Akun nonaktif');return {user,staff,authMethod:'chatgpt'}},authRecords:async kind=>sql.prepare('SELECT * FROM records WHERE kind=?').all(kind).map(r=>({...JSON.parse(r.data),id:r.id})),...sdProfiles,...settings,...model,...simulation,...vault,...policy,...generated});
 async function call(action,body={},expected=200){const r=await routes.POST(new Request('https://cbt.test/api/cbt',{method:'POST',headers:{'Content-Type':'application/json','origin':'https://cbt.test',cookie},body:JSON.stringify({action,identityConfirmed:true,session:'11111111-1111-4111-a111-111111111111',...body})}));const d=await r.json();assert.equal(r.status,expected,JSON.stringify(d));return d}
 async function seedYearSubjects(year){for(const unit of ['SD','SMP','SMA'])for(const name of simulation.subjectCatalog[unit]||[])await call('saveSubject',{period:{year,semester:1},data:{name,unit,grades:unit==='SD'?['5','6']:['1','2','3']}});}
 async function state(period){const r=await routes.GET(new Request('https://cbt.test/api/cbt'+(period?'?year='+encodeURIComponent(period.year)+'&semester='+period.semester:''),{headers:{cookie}}));return r.json()}
@@ -1346,4 +1350,32 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
  await modeRead('menu=Bank+soal');
  teacherModeEnabled=false;
  console.log('PASS: teacher-only exam mode follows WIB windows, assigned proctor landing, API locks, drafts, and admin exceptions.');
+}
+
+{
+ const {observeOperation}=telemetry;
+ const start=operationLogs.length;
+ await observeOperation('auth',async event=>{
+   event.identify('private-unlisted-action');return Response.json({});
+ });
+ assert.equal(operationLogs.length,start);
+ await observeOperation('cbt',async event=>{
+   event.identify('saveAnswers');event.failure(new Error('Operasi database gagal. Muat ulang dan coba kembali.'));
+   return Response.json({error:'private answer'}, {status:400});
+ });
+ await observeOperation('cbt',async event=>{
+   event.identify('submit');event.notConfirmed();return Response.json({token:'private token'});
+ });
+ assert.deepEqual(operationLogs.slice(start).map(event=>event.outcome),['database_error','not_confirmed']);
+ for(const operation of ['login','start_exam','autosave','submit_exam']){
+   assert(operationLogs.some(event=>event.operation===operation&&event.outcome==='ok'));
+ }
+ assert(operationLogs.some(event=>event.operation==='login'&&event.outcome==='rejected'));
+ for(const event of operationLogs){
+   assert.deepEqual(Object.keys(event).sort(),['durationMs','event','operation','outcome','statusCode']);
+   assert.equal(event.event,'cbt_operation');
+   assert(Number.isInteger(event.durationMs)&&event.durationMs>=0);
+ }
+ assert(!JSON.stringify(operationLogs).includes('private'));
+ console.log('PASS: CBT operation telemetry records outcomes and durations without request identifiers, credentials, or answers.');
 }
