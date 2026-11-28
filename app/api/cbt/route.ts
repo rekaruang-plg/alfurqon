@@ -367,10 +367,11 @@ async function readAttempt(row:any){
 }
 async function saveAttempt(a:any,starting=false){
  const {version,questions,...progress}=a;
+ const counted={...progress,answeredCount:Object.values(a.answers||{}).filter(Boolean).length,answeredCountVersion:version+1};
  const previous=storedQuestions.get(a);
  const split=!a.sharedQuestions&&(previous!==undefined||starting&&env.SPLIT_ATTEMPT_QUESTIONS);
  const snapshot=split?JSON.stringify(questions):undefined;
- const data=JSON.stringify(split||a.sharedQuestions?progress:{...progress,questions});
+ const data=JSON.stringify(split||a.sharedQuestions?counted:{...counted,questions});
  const writeSnapshot=snapshot!==undefined&&snapshot!==previous;
  const statement=writeSnapshot
    ?db().prepare('UPDATE attempts SET data=?,question_data=?,version=version+1 WHERE id=? AND version=?').bind(data,snapshot,a.id,version)
@@ -530,8 +531,9 @@ async function monitoringProgress(staff:any,examId:string,withParticipants:boole
  if(!exam||exam._kind!=='exam'||exam.deletedAt||!inPeriod(exam)||!examPermission(staff,exam,'monitor')){
    return Response.json({error:'Jadwal tidak tersedia untuk monitoring.'},{status:403});
  }
+ // Older records and writes from older handlers fall back to counting answers.
  const progressQuery=db().prepare(
-   "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,COALESCE(json_array_length(json_extract(data,'$.questionOrder')),json_array_length(data,'$.questions')) AS question_count,(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'') AS answered_count FROM attempts WHERE exam_id=?"
+   "SELECT id,student_id,exam_id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS summary,COALESCE(json_array_length(json_extract(data,'$.questionOrder')),json_array_length(data,'$.questions')) AS question_count,COALESCE(CASE WHEN CAST(json_extract(data,'$.answeredCountVersion') AS TEXT)=CAST(version AS TEXT) THEN CAST(json_extract(data,'$.answeredCount') AS INTEGER) END,(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'')) AS answered_count FROM attempts WHERE exam_id=?"
  ).bind(exam.id).all();
  const [{results},roster,token]=await Promise.all([
    progressQuery,
@@ -865,7 +867,8 @@ async function saveCompactStudentUpdate(b:any){
    typeof b.session!=='string'||!/^[a-f0-9-]{36,80}$/.test(b.session))return null;
  const [tokenHash,sessionHash]=await Promise.all([hash(b.token.trim().toUpperCase()),hash(b.session)]);
  const idProjection=saving?",COALESCE(json_extract(data,'$.questionOrder'),(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(attempts.data,'$.questions'))) AS question_ids":"";
- const row:any=await db().prepare("SELECT id,student_id,exam_id,version,json_remove(data,'$.questions','$.answers','$.grades','$.questionOrder','$.flags','$.actionNotes') AS summary"+idProjection+" FROM attempts WHERE token_hash=? AND student_id=?").bind(tokenHash,staff.studentId).first();
+ const answeredProjection=saving?",(SELECT json_group_array(key) FROM json_each(attempts.data,'$.answers') WHERE value<>'') AS answered_ids":"";
+ const row:any=await db().prepare("SELECT id,student_id,exam_id,version,json_remove(data,'$.questions','$.answers','$.grades','$.questionOrder','$.flags','$.actionNotes') AS summary"+idProjection+answeredProjection+" FROM attempts WHERE token_hash=? AND student_id=?").bind(tokenHash,staff.studentId).first();
  if(!row)return null;
  const a=JSON.parse(row.summary);
  const now=Date.now();
@@ -882,12 +885,17 @@ async function saveCompactStudentUpdate(b:any){
    const questionIds=new Set<string>(JSON.parse(row.question_ids||'[]'));
    if(!entries.length||entries.length>questionIds.size||entries.some(([key,value])=>!questionIds.has(key)||typeof value!=='string'||value.length>20000))fail('Jawaban tidak valid.');
    const delta=JSON.stringify(Object.fromEntries(entries));
-   const flagPatch=Array.isArray(b.flags)?JSON.stringify({flags:b.flags.filter((key:string)=>questionIds.has(key))}):'{}';
-   const saved=await db().prepare("UPDATE attempts SET data=json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?)),version=version+1 WHERE id=? AND version=?").bind(delta,savedAt,savedAt,flagPatch,...guards).run();
+   const answeredIds=new Set<string>(JSON.parse(row.answered_ids||'[]'));
+   for(const [key,value] of entries){
+     if(value)answeredIds.add(key);
+     else answeredIds.delete(key);
+   }
+   const progressPatch=JSON.stringify({
+     answeredCount:answeredIds.size,answeredCountVersion:row.version+1,
+     ...(Array.isArray(b.flags)?{flags:b.flags.filter((key:string)=>questionIds.has(key))}:{}),
+   });
+   const saved=await db().prepare("UPDATE attempts SET data=json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?)),version=version+1 WHERE id=? AND version=?").bind(delta,savedAt,savedAt,progressPatch,...guards).run();
    if(!saved.meta.changes)fail('Jawaban sedang diperbarui. Coba kembali.');
- }else if(savedAt-a.lastSeenAt>=20000){
-   const saved=await db().prepare("UPDATE attempts SET data=json_set(data,'$.lastSeenAt',?),version=version+1 WHERE id=? AND version=?").bind(savedAt,...guards).run();
-   if(!saved.meta.changes)return null;
  }
  return Response.json({compact:true,id:row.id,status:a.status,...(saving?{lastSavedAt:savedAt}:{}),serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
 }
@@ -942,8 +950,6 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
    if(b.action==='saveAnswers')return Response.json({compact:true,id:a.id,status:a.status,lastSavedAt:a.lastSavedAt,serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
  }
  if(b.action==='heartbeat'&&!expired){
-   // A recent answer save already counts as activity.
-   if(Date.now()-a.lastSeenAt>=20000){a.lastSeenAt=Date.now();await saveAttempt(a);}
    if(b.compact)return Response.json({compact:true,id:a.id,status:a.status,serverNow:Date.now()},{headers:{'Cache-Control':'no-store'}});
  }
  if(b.action==='submit'&&!expired){const issue=submissionIssue(a);if(issue)fail(issue);}
