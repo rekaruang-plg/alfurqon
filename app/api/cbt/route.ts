@@ -654,9 +654,9 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
  const menuExams=async()=>{
-   if(!teacher)return list('exam');
-   if(menu!=='Monitoring')return all('exam');
-   // Monitoring duties and navigation count only exams in the teacher's own unit.
+   const scopedTeacher=teacher&&menu==='Monitoring';
+   const scopedAdmin=staff.role==='Admin Unit'&&menu==='Jadwal ujian'&&typeof staff.unit==='string';
+   if(!scopedTeacher&&!scopedAdmin)return teacher?all('exam'):list('exam');
    // Leave legacy semester values to inPeriod so they retain JS number coercion.
    const {results}=await db().prepare(
      "SELECT id,version,data FROM records WHERE kind=? AND json_extract(data,'$.unit')=? "+
