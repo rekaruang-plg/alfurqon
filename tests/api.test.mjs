@@ -955,6 +955,31 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  user={email:'r6-admin-sd@test.invalid',displayName:'Admin SD'};
  assert.equal((await read({detail:'grade',id:attemptId})).id,attemptId);
  assert.equal((await read({detail:'bank',id:bankId})).id,bankId);
+ const scheduleFixtures=[
+   ['admin-schedule-other-unit',{unit:'SMP'}],
+   ['admin-schedule-other-year',{year:'2043/2044'}],
+   ['admin-schedule-semester-2',{semester:'2'}],
+   ['admin-schedule-default-semester',{semester:undefined}],
+   ['admin-schedule-legacy-semester',{semester:'01'}],
+   ['admin-schedule-deleted',{deletedAt:Date.now()}],
+ ];
+ for(const [id,override] of scheduleFixtures)await writeRecord(id,'exam',{...schedule,...override,id});
+ for(const semester of [1,2]){
+   queryReads=[];
+   const adminSchedule=await read({menu:'Jadwal ujian',semester:String(semester)});
+   const expected=(await records('exam')).filter(e=>!e.deletedAt&&e.unit==='SD'&&
+     (e.year||'2026/2027')===period.year&&Number(e.semester||1)===semester);
+   assert.deepEqual(adminSchedule.exams.map(e=>e.id).sort(),expected.map(e=>e.id).sort());
+   const examReads=queryReads.filter(r=>r.values[0]==='exam');
+   assert.equal(examReads.length,1);
+   const [examRead]=examReads;
+   assert.deepEqual(examRead.values,['exam','SD',period.year,semester===1?'2':'1']);
+   const candidateIds=sql.prepare(examRead.query).all(...examRead.values).map(row=>row.id);
+   assert(!candidateIds.includes('admin-schedule-other-unit')&&!candidateIds.includes('admin-schedule-other-year'));
+   assert.equal(candidateIds.includes('admin-schedule-semester-2'),semester===2);
+   assert(!postgresQuery(examRead.query).includes('json_extract'));
+ }
+ for(const [id] of scheduleFixtures)sql.prepare('DELETE FROM records WHERE id=?').run(id);
  user={email:'scoped-peer@test.invalid',displayName:'Guru Mapel Sama QA'};
  for(const menu of ['Bank soal','Buat soal']){
    assert(!(await read({menu})).banks.some(b=>[bankId,'scoped-grader-private'].includes(b.id)));
