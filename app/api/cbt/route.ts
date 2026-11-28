@@ -65,10 +65,20 @@ async function currentTeacherExamMode(staff:any){
  const now=Date.now();
  const today=wibDayStart(now);
  const day=24*60*60_000;
- const {results}=await env.DB.prepare("SELECT id,json_remove(data,'$.instructions','$.studentIds','$.excludedStudentIds') AS data FROM records WHERE kind=? AND json_extract(data,'$.unit')=?").bind('exam',staff.unit).all();
+ const latestStart=now+day+teacherExamLead;
+ const earliestEnd=today-day;
+ // Canonical UTC timestamps sort chronologically. Keep older formats in the
+ // candidate set so the existing Date.parse checks still decide eligibility.
+ const isoPattern='____-__-__T__:__:__.___Z';
+ const {results}=await env.DB.prepare(
+   "SELECT id,json_remove(data,'$.instructions','$.studentIds','$.excludedStudentIds') AS data FROM records "+
+   "WHERE kind=? AND json_extract(data,'$.unit')=? AND json_extract(data,'$.status')='Aktif' "+
+   "AND (json_extract(data,'$.start') NOT LIKE ? OR json_extract(data,'$.start')<=?) "+
+   "AND (json_extract(data,'$.end') NOT LIKE ? OR json_extract(data,'$.end')>=?)"
+ ).bind('exam',staff.unit,isoPattern,new Date(latestStart).toISOString(),isoPattern,new Date(earliestEnd).toISOString()).all();
  const exams=results.map((row:any)=>({...JSON.parse(row.data),id:row.id}))
    .filter((exam:any)=>exam.status==='Aktif'&&!exam.deletedAt&&!exam.simulation&&typeof exam.start==='string'&&typeof exam.end==='string')
-   .filter((exam:any)=>Date.parse(exam.start)<=now+day+teacherExamLead&&Date.parse(exam.end)>=today-day)
+   .filter((exam:any)=>Date.parse(exam.start)<=latestStart&&Date.parse(exam.end)>=earliestEnd)
    .map((exam:any)=>({...exam,proctor:(exam.duties||[]).some((d:any)=>d.staffId===staff.id&&d.role==='proctor')}));
  // An active scheduled window already requires exam mode. Consult attempt
  // deadlines after it ends, when an extension can keep the mode active.
