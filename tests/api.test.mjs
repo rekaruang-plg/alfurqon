@@ -995,6 +995,10 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert.equal(policy.submissionDelay(10000,7400,false,0.99),100);
  assert.equal(policy.submissionDelay(10000,9600,false,0.99),0);
  assert.equal(policy.submissionDelay(10000,10000,true,0.5),1750);
+ assert.deepEqual([1,2,3].map(failures=>policy.autosaveRetryDelay(failures,0.5)),[5000,10000,20000]);
+ assert.equal(policy.autosaveRetryDelay(1,0),4500);
+ assert.equal(policy.autosaveRetryDelay(1,1),5500);
+ assert.equal(policy.autosaveRetryDelay(100,1),30000);
  console.log('PASS: scoped admin, teacher, and student menus, deferred details, unit access, and deadline-aware submission delay.');
 }
 // Import approval permits warnings and missing keys, with explicit manual grading.

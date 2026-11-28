@@ -16,7 +16,7 @@ import AccountDetails from '../components/account-details';
 import BankQuestionPicker from '../components/bank-question-picker';
 import ReviewWorkspace,{reviewTabs} from '../components/review-workspace';
 import StudentDashboard from '../components/student-dashboard';
-import {answeredQuestion,submissionIssue,submissionDelay,editableGrade,written,keywordScore} from '../lib/review-policy';
+import {answeredQuestion,submissionIssue,submissionDelay,autosaveRetryDelay,editableGrade,written,keywordScore} from '../lib/review-policy';
 import {QuestionContent,formulaTemplates} from '../components/question-content';
 import {teacherExamMenus,teacherExamModeMessage,type TeacherExamMode} from '../lib/teacher-exam-mode';
 import React,{useEffect,useState,useRef} from 'react';
@@ -32,7 +32,32 @@ const date=(v:any)=>new Date(v).toLocaleString('id-ID',{day:'numeric',month:'sho
 const uid=()=>{const bytes=crypto.getRandomValues(new Uint8Array(18));return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');};
 const emptyQ=(unit='SD'):Question=>({id:uid(),type:'PG',text:'',options:Array(unit==='SMA'?5:4).fill(''),key:'0',points:defaultQuestionPoints('PG'),mode:'TEKS'});
 function savedPeriod(){try{const p=JSON.parse(localStorage.getItem('cbt-period')||'null');return p&&/^\d{4}\/\d{4}$/.test(p.year)&&[1,2].includes(Number(p.semester))?{year:p.year,semester:Number(p.semester)}:null}catch{return null}}
-async function api(action:string,data:any={}){const period=typeof window!=='undefined'?savedPeriod():null;const r=await fetch('/api/cbt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,period,...data})});const s:any=await r.json();if(!r.ok)throw Object.assign(Error(s.error),{teacherExamMode:s.teacherExamMode});return s}
+async function api(action:string,data:any={}){
+ const period=typeof window!=='undefined'?savedPeriod():null;
+ const body=JSON.stringify({action,period,...data});
+ const autosave=action==='saveAnswers';
+ const response=await fetch('/api/cbt',{method:'POST',headers:{'Content-Type':'application/json'},body}).catch(error=>{
+   if(!autosave||!(error instanceof TypeError))throw error;
+   throw Object.assign(Error('Koneksi terputus saat menyimpan jawaban.'),{retryable:true});
+ });
+ const temporaryStatus=response.status===408||response.status===429||response.status>=500;
+ const result:any=await response.json().catch(error=>{
+   if(!autosave)throw error;
+   const expired=response.status===401||response.status===403;
+   throw Object.assign(Error(expired?'Sesi ujian tidak tersedia. Masuk kembali atau hubungi pengawas.':'Server belum bisa mengonfirmasi penyimpanan.'),{
+     retryable:temporaryStatus||response.ok&&error instanceof TypeError,
+   });
+ });
+ if(!response.ok){
+   const retryable=autosave&&(temporaryStatus||response.status===400&&[
+     'Operasi database gagal. Muat ulang dan coba kembali.',
+     'Jawaban sedang diperbarui. Coba kembali.',
+   ].includes(result?.error));
+   const message=result?.error||(autosave?'Server belum bisa mengonfirmasi penyimpanan.':undefined);
+   throw Object.assign(Error(message),{teacherExamMode:result?.teacherExamMode,retryable});
+ }
+ return result;
+}
 async function auth(action:string,data:any={}){const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...data})});const d:any=await r.json();if(!r.ok)throw Error(d.error);return d}
 function Login({onLogin,onStudent}:{onLogin:()=>void,onStudent:()=>void}){const [username,setUsername]=useState(''),[password,setPassword]=useState(''),[showPassword,setShowPassword]=useState(false),[error,setError]=useState(''),[busy,setBusy]=useState(false);return <main className="login-layout"><section className="login-story"><SchoolLogo/><span className="eyebrow">YAYASAN SEKOLAH AL FURQON</span><h1>Satu ruang.<br/>Semua persiapan ujian.</h1><p>Masuk sebagai siswa, guru, admin unit, atau super admin dengan akun yang diberikan pengelola.</p><div className="login-roles"><span>SD kelas V–VI</span><span>SMP</span><span>SMA</span></div></section><section className="login-card panel"><h2>Masuk CBT</h2><p>Gunakan username dan password CBT Anda.</p><form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{await auth('login',{username,password});onLogin()}catch(e:any){setError(e.message)}finally{setBusy(false)}}}><Field label="Username"><input required autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username dari kartu akun"/></Field><div className="field"><label htmlFor="cbt-login-password">Password</label><div style={{display:'flex',gap:8,alignItems:'center'}}><input id="cbt-login-password" required type={showPassword?'text':'password'} autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} style={{flex:1,minWidth:0}}/><button type="button" className="icon-btn" aria-label={showPassword?'Sembunyikan password':'Tampilkan password'} aria-controls="cbt-login-password" onClick={()=>setShowPassword(show=>!show)}>{showPassword?<EyeOff size={18} aria-hidden="true"/>:<Eye size={18} aria-hidden="true"/>}</button></div></div>{error&&<div role="alert" className="notice error">{error}</div>}<button className="primary full" disabled={busy}>{busy?'Memeriksa akun…':'Masuk ke dashboard'}<ArrowRight size={18}/></button></form><AccountSecurity recovery/><small>Siswa login terlebih dahulu, kemudian memasukkan token dari pengawas.</small></section></main>}
 function csv(name:string,rows:any[]){if(!rows.length)return;const keys=Object.keys(rows[0]);const quote=(v:any)=>'"'+String(v??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';const blob=new Blob(['\ufeff'+[keys,...rows.map(r=>keys.map(k=>r[k]))].map(r=>r.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)}
@@ -373,15 +398,23 @@ useEffect(()=>{const guard=(e:BeforeUnloadEvent)=>{if(Object.keys(failed.current
 async function acquireLock(id:string){if(lockRelease.current||!navigator.locks)return true;return new Promise<boolean>(resolve=>{navigator.locks.request('cbt-attempt-'+id,{ifAvailable:true},async lock=>{if(!lock){resolve(false);return;}await new Promise<void>(release=>{lockRelease.current=release;resolve(true);});}).catch(()=>resolve(false));});}
 async function inspectToken(){setBusy(true);setMessage('');try{setIdentityChecked(false);setPreview(await api('preview',{token}))}catch(e:any){setMessage(e.message)}finally{setBusy(false)}}
 useEffect(()=>{if(initialToken)void inspectToken()},[initialToken]);
-async function enter(){setBusy(true);setMessage('');try{if(!identityChecked)throw Error('Centang konfirmasi identitas terlebih dahulu.');if(preview.exam.browserGuard&&document.fullscreenEnabled&&!document.fullscreenElement){try{await document.documentElement.requestFullscreen();}catch{throw Error('Layar penuh belum diizinkan browser. Izinkan layar penuh lalu tekan Mulai kembali; hubungi pengawas bila masih gagal.');}}if(!await acquireLock(preview.id))throw Error('Ujian sudah terbuka di tab lain. Tutup tab ujian lainnya dahulu.');if(!identityChecked)throw Error('Centang konfirmasi identitas terlebih dahulu.');const a=await api('enter',{token,session:session.current,identityConfirmed:true});let draft:any=null;try{draft=JSON.parse(localStorage.getItem('cbt-draft-'+a.id)||'null')}catch{};failed.current=a.status==='Mengerjakan'?draft?.pending||{}:{};latestAnswers.current={...a.answers,...failed.current};flagsRef.current=draft?.flags||a.flags;setAnswers(latestAnswers.current);setFlags(flagsRef.current);guardReason.current='';setGuardBlocked(false);apply(a);setPreview(null);try{sessionStorage.setItem('cbt-active',JSON.stringify({id:a.id,token}));}catch{}persist(a);await flush();}catch(e:any){setMessage(e.message)}finally{setBusy(false)}}
+async function enter(){setBusy(true);setMessage('');try{if(!identityChecked)throw Error('Centang konfirmasi identitas terlebih dahulu.');if(preview.exam.browserGuard&&document.fullscreenEnabled&&!document.fullscreenElement){try{await document.documentElement.requestFullscreen();}catch{throw Error('Layar penuh belum diizinkan browser. Izinkan layar penuh lalu tekan Mulai kembali; hubungi pengawas bila masih gagal.');}}if(!await acquireLock(preview.id))throw Error('Ujian sudah terbuka di tab lain. Tutup tab ujian lainnya dahulu.');if(!identityChecked)throw Error('Centang konfirmasi identitas terlebih dahulu.');const a=await api('enter',{token,session:session.current,identityConfirmed:true});let draft:any=null;try{draft=JSON.parse(localStorage.getItem('cbt-draft-'+a.id)||'null')}catch{};failed.current=a.status==='Mengerjakan'?draft?.pending||{}:{};latestAnswers.current={...a.answers,...failed.current};flagsRef.current=draft?.flags||a.flags;setAnswers(latestAnswers.current);setFlags(flagsRef.current);guardReason.current='';setGuardBlocked(false);cancelSaveTimer();saveFailures.current=0;autosaveBlocked.current=false;apply(a);setPreview(null);try{sessionStorage.setItem('cbt-active',JSON.stringify({id:a.id,token}));}catch{}persist(a);await flush();}catch(e:any){setMessage(e.message)}finally{setBusy(false)}}
 const saveBufferTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
-useEffect(()=>()=>{if(saveBufferTimer.current!==null)clearTimeout(saveBufferTimer.current);},[]);
+const saveFailures=useRef(0),autosaveBlocked=useRef(false);
+function cancelSaveTimer(){
+ if(saveBufferTimer.current!==null){clearTimeout(saveBufferTimer.current);saveBufferTimer.current=null;}
+}
+function scheduleSave(delay:number){
+ if(saveBufferTimer.current!==null||autosaveBlocked.current)return;
+ saveBufferTimer.current=setTimeout(()=>{
+   saveBufferTimer.current=null;
+   if(!closing.current)void flush();
+ },delay);
+}
+useEffect(()=>cancelSaveTimer,[]);
 async function flush(){if(guardReason.current){if(flushing.current)return;flushing.current=true;try{const a=await api('securityLock',{token,session:session.current,reason:guardReason.current,answers:latestAnswers.current});apply(a);if(a.securityLocked||a.status==='Dikumpulkan'){guardReason.current='';failed.current={};persist(a);}}catch(e:any){setMessage('Halaman terkunci. Menunggu koneksi ke pengawas: '+e.message);}finally{flushing.current=false;}return;}if(exitPending.current){if(flushing.current)return;flushing.current=true;try{const a=await api('exitExam',{token,session:session.current,answers:latestAnswers.current});apply(a);exitPending.current=false;closing.current=false;sessionStorage.removeItem('cbt-active');}catch(e:any){setMessage('Menunggu koneksi untuk mengumpulkan ujian: '+e.message)}finally{flushing.current=false;}return;}if(flushing.current||!Object.keys(failed.current).length||attemptRef.current?.status!=='Mengerjakan'||attemptRef.current.pausedAt)return;
  flushing.current=true;
- if(saveBufferTimer.current!==null){
-   clearTimeout(saveBufferTimer.current);
-   saveBufferTimer.current=null;
- }
+ cancelSaveTimer();
  try{
    if(!await acquireLock(attemptRef.current.id)){setMessage('Ujian terbuka di tab lain.');return;}
    while(Object.keys(failed.current).length){
@@ -399,6 +432,8 @@ async function flush(){if(guardReason.current){if(flushing.current)return;flushi
        setStatus('Ada jawaban belum tersimpan di server');
        return;
      }
+     saveFailures.current=0;
+     autosaveBlocked.current=false;
      for(const [key,value] of Object.entries(batch))if(failed.current[key]===value)delete failed.current[key];
      persist();
      // New edits get their own batch window, except when submitting.
@@ -409,18 +444,22 @@ async function flush(){if(guardReason.current){if(flushing.current)return;flushi
  }catch(e:any){
    setStatus('Tersimpan di perangkat — belum terkirim');
    setMessage(e.message);
-   if(e.message.includes('dijeda')){try{apply(await api('heartbeat',{token,session:session.current}));}catch{}}
+   cancelSaveTimer();
+   if(e.retryable){
+     autosaveBlocked.current=false;
+     scheduleSave(autosaveRetryDelay(++saveFailures.current));
+   }else if(e.message.includes('dijeda')){
+     autosaveBlocked.current=false;
+     try{apply(await api('heartbeat',{token,session:session.current}));}catch{}
+   }else{
+     autosaveBlocked.current=true;
+   }
  }finally{flushing.current=false;persist();}
 }
 function change(value:string,questionId=attempt.questions[index].id,nextFlags=flags){latestAnswers.current={...latestAnswers.current,[questionId]:value};failed.current[questionId]=value;flagsRef.current=nextFlags;setAnswers(latestAnswers.current);setFlags(nextFlags);persist();setStatus('Tersimpan di perangkat');
- if(saveBufferTimer.current===null){
-   saveBufferTimer.current=setTimeout(()=>{
-     saveBufferTimer.current=null;
-     if(!closing.current)void flush();
-   },1500);
- }
+ scheduleSave(1500);
 }
-useEffect(()=>{if(!attempt||attempt.status!=='Mengerjakan')return;const retry=()=>{if(!closing.current)void flush();};window.addEventListener('online',retry);const t=setInterval(()=>{if(saveBufferTimer.current===null)retry();},5000+Math.floor(Math.random()*2000));const heartbeat=setInterval(async()=>{if(flushing.current||closing.current||Object.keys(failed.current).length&&!attemptRef.current?.pausedAt)return;flushing.current=true;try{if(!await acquireLock(attempt.id))return;const a=await api('heartbeat',{token,session:session.current,compact:true});apply(a);persist()}catch(e:any){setMessage(e.message);if(e.message.includes('dijeda'))apply({...attemptRef.current,pausedAt:Date.now(),remainingMs:Math.max(0,attemptRef.current.deadline-Date.now()-offset.current),serverNow:Date.now()+offset.current})}finally{flushing.current=false;}},25000+Math.floor(Math.random()*10000));return()=>{clearInterval(t);clearInterval(heartbeat);window.removeEventListener('online',retry)}},[attempt?.id,attempt?.status,token]);
+useEffect(()=>{if(!attempt||attempt.status!=='Mengerjakan')return;const retry=()=>{if(!closing.current&&(!autosaveBlocked.current||guardReason.current||exitPending.current))void flush();};window.addEventListener('online',retry);const t=setInterval(()=>{if(saveBufferTimer.current===null||guardReason.current||exitPending.current)retry();},5000+Math.floor(Math.random()*2000));const heartbeat=setInterval(async()=>{if(flushing.current||closing.current||Object.keys(failed.current).length&&!attemptRef.current?.pausedAt)return;flushing.current=true;try{if(!await acquireLock(attempt.id))return;const a=await api('heartbeat',{token,session:session.current,compact:true});apply(a);persist()}catch(e:any){setMessage(e.message);if(e.message.includes('dijeda'))apply({...attemptRef.current,pausedAt:Date.now(),remainingMs:Math.max(0,attemptRef.current.deadline-Date.now()-offset.current),serverNow:Date.now()+offset.current})}finally{flushing.current=false;}},25000+Math.floor(Math.random()*10000));return()=>{clearInterval(t);clearInterval(heartbeat);window.removeEventListener('online',retry)}},[attempt?.id,attempt?.status,token]);
 async function submit(auto=false){
  if(closing.current||auto&&Date.now()-lastAutoSubmit.current<5000)return;
  if(auto)lastAutoSubmit.current=Date.now();
