@@ -1,3 +1,4 @@
+import {observeOperation,type OperationTelemetry} from '../../../lib/operation-telemetry';
 import {sameOrigin} from '../../../lib/request-origin';
 import {teacherExamActions,teacherExamMenus,teacherExamModeMessage,teacherExamGrace,teacherExamLead,teacherExamWindow,wibDayStart} from '../../../lib/teacher-exam-mode';
 import {sdSubjectProfiles,smpSubjectProfiles,smaQuestionTypes} from '../../../lib/sd-subject-profiles';
@@ -106,7 +107,7 @@ function lockedTeacherMenu(teacherExamMode:NonNullable<Awaited<ReturnType<typeof
  return Response.json({error:teacherExamModeMessage,teacherExamMode},{status:423,headers:{'Cache-Control':'no-store'}});
 }
 
-async function handlers(req:Request){
+async function handlers(req:Request,telemetry?:OperationTelemetry){
 let requestBody:any=null;
 if(req.method==='POST'){
  const origin=req.headers.get('origin');
@@ -114,6 +115,7 @@ if(req.method==='POST'){
  const body=await req.text();
  if(body.length>1_500_000)return {GET,POST:async()=>Response.json({error:'Data terlalu besar.'},{status:400})};
  requestBody=JSON.parse(body);
+ telemetry?.identify(requestBody?.action);
 }
 const authentication=actor(req);
 const identity=await authentication.catch(()=>null);
@@ -425,7 +427,11 @@ async function startWithUniqueOrder(a:any,questions:Question[]){
 }
 function teaches(staff:any,x:any){if(staff.role!=='Guru')return true;const tasks=staff.assignments?.length?staff.assignments:[{unit:staff.unit,subject:staff.subject,classes:[]}];return tasks.some((t:any)=>t.unit===x.unit&&t.subject===x.subject&&(!t.grade||!x.grade||t.grade===x.grade)&&(!t.classes?.length||(x.className?t.classes.includes(x.className):!x.grade||staff.assignedClassLevels?.some((c:any)=>c.unit===x.unit&&t.classes.includes(c.name)&&String(c.grade||c.name.match(/^\d+/)?.[0])===x.grade))));}
 function homeroomCanWrite(staff:any,x:any){return x.unit==='SD'&&!!(x.grade||x.className)&&(staff.homeroomClasses||[]).some((c:any)=>(!x.grade||c.grade===x.grade)&&(!x.className||c.name===x.className));}
-function publicAttempt(a:any,exam:any,student:any){return {id:a.id,student:{name:student.name,nis:student.nis,unit:student.unit,className:student.className},exam:{title:exam.title,subject:exam.subject,duration:exam.duration,start:exam.start,end:exam.end,strictExit:!!a.strictExit,browserGuard:!!a.browserGuard,instructions:exam.instructions||'Periksa jawaban sebelum mengumpulkan. Hubungi pengawas bila mengalami kendala.'},status:a.status,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,securityReason:a.securityReason,pausedAt:a.pausedAt,remainingMs:a.remainingMs,startedAt:a.startedAt,submitAfter:a.submitAfter,deadline:a.deadline,lastSavedAt:a.lastSavedAt,answers:a.answers||{},flags:a.flags||[],questions:(a.questions||[]).map(({key,keywords,...q}:Question)=>q),published:!!a.published,score:a.published?a.score:null,serverNow:Date.now()}}
+function publicAttempt(a:any,exam:any,student:any){
+ if(requestBody?.action==='saveAnswers'||
+   requestBody?.action==='submit'&&a.status!=='Dikumpulkan'||
+   requestBody?.action==='enter'&&(a.status!=='Mengerjakan'||a.pausedAt||a.securityLocked))telemetry?.notConfirmed();
+ return {id:a.id,student:{name:student.name,nis:student.nis,unit:student.unit,className:student.className},exam:{title:exam.title,subject:exam.subject,duration:exam.duration,start:exam.start,end:exam.end,strictExit:!!a.strictExit,browserGuard:!!a.browserGuard,instructions:exam.instructions||'Periksa jawaban sebelum mengumpulkan. Hubungi pengawas bila mengalami kendala.'},status:a.status,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,securityReason:a.securityReason,pausedAt:a.pausedAt,remainingMs:a.remainingMs,startedAt:a.startedAt,submitAfter:a.submitAfter,deadline:a.deadline,lastSavedAt:a.lastSavedAt,answers:a.answers||{},flags:a.flags||[],questions:(a.questions||[]).map(({key,keywords,...q}:Question)=>q),published:!!a.published,score:a.published?a.score:null,serverNow:Date.now()}}
 function relatedClass(staff:any,c:any){return staff.role!=='Guru'||c.homeroomId===staff.id||(staff.assignments||[]).some((t:any)=>t.unit===c.unit&&(!t.classes?.length||t.classes.includes(c.name)));}
 // Apply the same cutoff to student, monitoring, and direct proctor requests.
 async function settleAttempt(a:any){
@@ -1208,7 +1214,7 @@ const row:any=await db().prepare('SELECT * FROM attempts WHERE id=?').bind(b.id)
 }
 else if(b.action==='saveStaff'){const input=b.data;if(staff.role!=='Super Admin'&&!(staff.role==='Admin Unit'&&input.role==='Guru'&&input.unit===staff.unit))fail('Akses pengelola tidak diizinkan.');const s={year:period.year,niy:String(input.niy||''),name:String(input.name||''),email:String(input.email||'').trim(),role:input.role,unit:input.unit,subject:String(input.subject||''),subjectId:'',gender:String(input.gender||''),permission:input.role==='Guru'?'Full akses':input.permission,assignments:Array.isArray(input.assignments)?input.assignments:[]};if(!s.name.trim())fail('Isi nama pengelola.');if(!s.email&&s.role==='Guru')s.email=(s.niy||id())+'@teacher.local';if(!s.email?.includes('@')||!['Super Admin','Admin Unit','Guru'].includes(s.role))fail('Email atau peran tidak valid.');if(!['Full akses','Upload dan koreksi','Koreksi saja'].includes(s.permission))fail('Hak akses tidak valid.');for(const task of s.assignments){if(s.role==='Guru'&&task.unit!==s.unit)fail('Unit penugasan harus sama dengan unit utama guru.');task.subject=(await subjectFor(task.unit,task.subject)).name;if(!Array.isArray(task.classes))fail('Penugasan kelas tidak valid.');if(task.classes.includes('__NONE__'))fail('Pilih minimal satu kelas atau centang Semua kelas.');if(staff.role==='Admin Unit'&&task.unit!==staff.unit)fail('Penugasan di luar unit.');const classes=await all('class');if(task.classes.some((n:string)=>!classes.some((c:any)=>c.unit===task.unit&&c.year===period.year&&c.name===n)))fail('Pilih kelas dari master.');}if(s.role==='Guru'){s.subject=s.assignments[0]?.subject||s.subject;if(s.subject){const sub=await subjectFor(s.unit,s.subject);s.subjectId=sub.id;s.subject=sub.name;}}const people=await all('staff');const existing=input.id?people.find((x:any)=>x.id===input.id):people.find((x:any)=>(s.niy&&x.niy===s.niy&&x.unit===s.unit)||x.email.toLowerCase()===s.email.toLowerCase()||(!s.niy&&!input.email&&x.unit===s.unit&&x.name===s.name));if(existing&&!input.email)s.email=existing.email;if(existing&&!s.niy)s.niy=existing.niy||'';if(input.id&&!existing)fail('Guru tidak ditemukan.');if(s.niy&&people.some((p:any)=>p.id!==existing?.id&&String(p.niy||'').toLowerCase()===s.niy.toLowerCase()))fail('NIY sudah digunakan.');if(people.some((x:any)=>x.id!==existing?.id&&x.email.toLowerCase()===s.email.toLowerCase()))fail('Email sudah digunakan.');if(existing&&staff.role==='Admin Unit'&&(existing.role!=='Guru'||existing.unit!==staff.unit))fail('Akun di luar unit.');if(existing?.email.toLowerCase()===user.email.toLowerCase())fail('Akun sendiri tidak dapat diubah di sini.');const staffKey=await put('staff',{...existing,...s,contractNo:existing?.contractNo||String(people.filter((p:any)=>p.role==='Guru'&&p.unit===s.unit).length+1).padStart(3,'0'),disabled:existing?.disabled||false,demo:demo||existing?.demo||false,...(existing?{id:existing.id,version:existing.version}:{})});if(s.role==='Guru'){if(demo){const person=await get(staffKey);await env.DB!.prepare('INSERT INTO records(id,kind,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,version=records.version+1').bind(staffKey,'staff',JSON.stringify({...person,demo:true})).run();}await generatedAccount(await get(staffKey),false,demo);}await audit(staff,'Atur akses pengelola',s.email);}
 else fail('Tindakan tidak dikenal');return Response.json({ok:true});
-}catch(e:any){return Response.json({error:e.message||'Terjadi kesalahan'},{status:400})}}
+}catch(e:any){telemetry?.failure(e);return Response.json({error:e.message||'Terjadi kesalahan'},{status:400})}}
 
 if(demo&&!await get("catalog-v2"))await ensureCatalog();
 return {GET,POST};
@@ -1241,4 +1247,12 @@ async function readEntry(req:Request){
  return Response.json({entry:{name:staff.name,role:staff.role,authMethod:account.authMethod,navigation,...(teacherExamMode?{teacherExamMode}:{})}},{headers});
 }
 export async function GET(req:Request){try{if(new URL(req.url).searchParams.get('entry')==='1')return await readEntry(req);return await (await handlers(req)).GET(req)}catch{return Response.json({error:"Tidak dapat memuat data."},{status:400})}}
-export async function POST(req:Request){try{return await (await handlers(req)).POST(req)}catch{return Response.json({error:"Permintaan tidak valid."},{status:400})}}
+export async function POST(req:Request){
+ return observeOperation('cbt',async telemetry=>{
+   try{return await (await handlers(req,telemetry)).POST(req);}
+   catch(error){
+     telemetry.failure(error);
+     return Response.json({error:"Permintaan tidak valid."},{status:400});
+   }
+ });
+}
