@@ -18,7 +18,7 @@ function postgresQuery(source: string) {
   if (/^INSERT OR IGNORE INTO /.test(q)) q=q.replace('INSERT OR IGNORE','INSERT')+' ON CONFLICT DO NOTHING';
   q=q.replace(/json_remove\(data,('\$\.[a-zA-Z]+'(?:,'\$\.[a-zA-Z]+')*)\)/g,(_match,paths:string)=>
     "(data::jsonb - ARRAY["+paths.replaceAll("$.","")+"])::text")
-    .replace(/json_extract\(data,'\$\.(status|unit|year|semester|ownerId|createdBy|simulation|className|at|graded|published|correctedAt|deadline|pausedAt|securityLocked|pauseUntil|submittedAt|resumeFor)'\)/g,"(data::jsonb ->> '$1')")
+    .replace(/json_extract\(data,'\$\.(status|unit|year|semester|ownerId|createdBy|simulation|className|at|graded|published|correctedAt|deadline|pausedAt|securityLocked|pauseUntil|submittedAt|resumeFor|answeredCount|answeredCountVersion)'\)/g,"(data::jsonb ->> '$1')")
     .replace(" IN (1,'true')"," = 'true'")
     .replace("json_extract(data,'$.form.title')","(data::jsonb #>> '{form,title}')")
     .replace("json_each(records.data,'$.studentIds')","jsonb_array_elements_text(CASE WHEN jsonb_typeof(records.data::jsonb->'studentIds')='array' THEN records.data::jsonb->'studentIds' ELSE '[]'::jsonb END) AS enrollment(value)")
@@ -34,6 +34,7 @@ function postgresQuery(source: string) {
     .replace(/json_extract\(data,'\$\.(answers|grades)'\)(?= AS scoring_)/g,"(data::jsonb ->> '$1')")
     .replace(/json_extract\(((?:student_base|roster_student)\.data),'\$\.([a-zA-Z][a-zA-Z0-9]*)'\)/g,"($1::jsonb ->> '$2')")
     .replace("(SELECT count(*) FROM json_each(attempts.data,'$.answers') WHERE value<>'')","(SELECT count(*) FROM jsonb_each_text(NULLIF(attempts.data::jsonb->'answers','null'::jsonb)) WHERE value<>'')")
+    .replace("(SELECT json_group_array(key) FROM json_each(attempts.data,'$.answers') WHERE value<>'')","(SELECT jsonb_agg(key)::text FROM jsonb_each_text(NULLIF(attempts.data::jsonb->'answers','null'::jsonb)) WHERE value<>'')")
     .replace("json_extract(data,?)","(data::jsonb ->> substring(?::text from 3))")
     .replace("json_array_length(json_extract(data,'$.questionOrder'))","jsonb_array_length(NULLIF((data::jsonb ->> 'questionOrder')::jsonb,'null'::jsonb))")
     .replace("json_array_length(data,'$.questions')","jsonb_array_length(data::jsonb -> 'questions')")
@@ -42,7 +43,6 @@ function postgresQuery(source: string) {
     .replace("(SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(attempts.data,'$.questions'))","(SELECT jsonb_agg(q->'id')::text FROM jsonb_array_elements(NULLIF(attempts.data::jsonb->'questions','null'::jsonb)) AS items(q))")
     // Bind serialized JSON as text so Postgres.js does not JSON-encode it again.
     .replace("json_patch(json_set(data,'$.answers',json_patch(COALESCE(json_extract(data,'$.answers'),'{}'),json(?)),'$.lastSavedAt',?,'$.lastSeenAt',?),json(?))","(jsonb_set(data::jsonb,'{answers}',COALESCE(NULLIF(data::jsonb->'answers','null'::jsonb),'{}'::jsonb) || ?::text::jsonb) || jsonb_build_object('lastSavedAt',?::bigint,'lastSeenAt',?::bigint) || ?::text::jsonb)::text")
-    .replace("json_set(data,'$.lastSeenAt',?)","(data::jsonb || jsonb_build_object('lastSeenAt',?::bigint))::text")
     .replace("json_set(data,'$.published',json('true'),'$.publishedAt',?)","(data::jsonb || jsonb_build_object('published',true,'publishedAt',?::bigint))::text");
   let index=0;
   return q.replace(/\?/g,()=>'$'+(++index));
