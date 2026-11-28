@@ -474,14 +474,21 @@ async function gradingQuestionOrder(exam:any):Promise<string[]>{
  }
  return [];
 }
-async function studentOverview(studentId:string,studentMenu?:string|null){
+type StudentHistoryRequest={page?:unknown;topic?:unknown;subject?:unknown};
+const studentHistoryPageSize=20;
+
+async function studentOverview(studentId:string,studentMenu?:string|null,history:StudentHistoryRequest={}){
  const student=await get(studentId);if(!student)fail('Data siswa tidak ditemukan.');
  if(studentMenu&&!['Dashboard','Jadwal ujian','Hasil ujian'].includes(studentMenu))fail('Menu siswa tidak tersedia.');
  const resultsOnly=studentMenu==='Hasil ujian';
- const mine=(await db().prepare(
-   "SELECT id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS data FROM attempts WHERE student_id=?"
- ).bind(student.id).all()).results.map((r:any)=>({...JSON.parse(r.data),id:r.id}));
+ const schedulesOnly=studentMenu==='Jadwal ujian';
  const now=Date.now();
+ const attemptSummarySQL="SELECT id,json_remove(data,'$.questions','$.grades','$.questionOrder','$.answers','$.flags','$.sessionHash') AS data FROM attempts WHERE student_id=?";
+ const workingSQL=" AND json_extract(data,'$.status')='Mengerjakan'";
+ const futureExamSQL="(json_extract(records.data,'$.end') NOT LIKE '____-__-__T__:__:__.___Z' OR json_extract(records.data,'$.end')>?)";
+ const mine=(await db().prepare(attemptSummarySQL+(resultsOnly?workingSQL:schedulesOnly?
+   " AND (json_extract(data,'$.status')='Mengerjakan' OR EXISTS (SELECT 1 FROM records WHERE records.id=attempts.exam_id AND records.kind='exam' AND "+futureExamSQL+"))":"")
+ ).bind(student.id,...(schedulesOnly?[new Date(now).toISOString()]:[])).all()).results.map((r:any)=>({...JSON.parse(r.data),id:r.id}));
  for(const summary of mine){
    if(summary.status!=='Mengerjakan')continue;
    const resumeDue=summary.pauseUntil&&now>=summary.pauseUntil;
@@ -495,7 +502,30 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
      summary[field]=attempt[field];
    }
  }
- const selectedAttempts=resultsOnly?mine.filter((a:any)=>a.status==='Dikumpulkan'):mine;
+ let selectedAttempts=mine;
+ let studentHistory;
+ if(resultsOnly){
+   const requestedPage=Number(history?.page??1);
+   if(!Number.isInteger(requestedPage)||requestedPage<1||requestedPage>100000)fail('Halaman hasil ujian tidak valid.');
+   const topic=typeof history?.topic==='string'?history.topic:'';
+   const subject=typeof history?.subject==='string'?history.subject:'';
+   const topicSQL="COALESCE(NULLIF(json_extract(records.data,'$.topic'),''),json_extract(records.data,'$.title'))";
+   const subjectSQL="json_extract(records.data,'$.subject')";
+   const validExamSQL="records.kind='exam' AND COALESCE(CAST(json_extract(records.data,'$.deletedAt') AS TEXT),'') IN ('','0','false')";
+   const finishedSQL=" AND json_extract(data,'$.status')='Dikumpulkan'";
+   const [page,options]=await Promise.all([
+     db().prepare(attemptSummarySQL+finishedSQL+" AND EXISTS (SELECT 1 FROM records WHERE records.id=attempts.exam_id AND "+validExamSQL+
+       (topic?" AND "+topicSQL+"=?":"")+(subject?" AND "+subjectSQL+"=?":"")+
+       ") ORDER BY CAST(json_extract(data,'$.submittedAt') AS BIGINT) DESC NULLS LAST,id DESC LIMIT ? OFFSET ?"
+     ).bind(student.id,...(topic?[topic]:[]),...(subject?[subject]:[]),studentHistoryPageSize+1,(requestedPage-1)*studentHistoryPageSize).all(),
+     db().prepare("SELECT DISTINCT "+topicSQL+" AS topic,"+subjectSQL+" AS subject FROM records WHERE "+validExamSQL+
+       " AND id IN (SELECT exam_id FROM attempts WHERE student_id=?"+finishedSQL+")").bind(student.id).all(),
+   ]);
+   selectedAttempts=page.results.slice(0,studentHistoryPageSize).map((r:any)=>({...JSON.parse(r.data),id:r.id}));
+   studentHistory={page:requestedPage,hasNext:page.results.length>studentHistoryPageSize,topic,subject,
+     topics:[...new Set(options.results.map(row=>row.topic).filter(Boolean))].sort(),
+     subjects:[...new Set(options.results.map(row=>row.subject).filter(Boolean))].sort()};
+ }
  const resultExams:any[]=[];
  const base=resultsOnly?null:await rawGet(studentId);
  const examSummarySQL="SELECT id,json_remove(data,'$.instructions','$.duties') AS data FROM records WHERE kind=?";
@@ -514,7 +544,9 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
    const {results:profiles}=await db().prepare("SELECT json_extract(data,'$.className') AS class_name FROM records WHERE kind IN (?,?) AND substr(id,length(id)-length(?)+1)=?").bind('student_year','academic_profile',suffix,suffix).all();
    const classNames=[...new Set([student.className,base?.className,...profiles.map((row:any)=>row.class_name)].filter(Boolean))];
    const classMatch=classNames.length?" OR json_extract(data,'$.className') IN ("+classNames.map(()=>'?').join(',')+")":"";
-   const rows=await db().prepare(examSummarySQL+" AND (id IN (SELECT exam_id FROM attempts WHERE student_id=?) OR EXISTS (SELECT 1 FROM json_each(records.data,'$.studentIds') WHERE value=?)"+classMatch+")").bind('exam',studentId,studentId,...classNames).all();
+   const relevantSchedule=schedulesOnly?" AND (id IN (SELECT exam_id FROM attempts WHERE student_id=?"+workingSQL+") OR "+futureExamSQL+")":"";
+   const rows=await db().prepare(examSummarySQL+" AND (id IN (SELECT exam_id FROM attempts WHERE student_id=?) OR EXISTS (SELECT 1 FROM json_each(records.data,'$.studentIds') WHERE value=?)"+classMatch+")"+relevantSchedule)
+     .bind('exam',studentId,studentId,...classNames,...(schedulesOnly?[studentId,new Date(now).toISOString()]:[])).all();
    for(const row of rows.results){
      const exam=JSON.parse(row.data);
      if(!exam.deletedAt)resultExams.push({...exam,id:row.id});
@@ -522,7 +554,9 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
  }
  const profiles=new Map<string,any>();
  const attemptedExams=new Set(selectedAttempts.map((attempt:any)=>attempt.examId));
+ const workingExams=new Set(mine.filter(a=>a.status==='Mengerjakan').map(a=>a.examId));
  const schedules=[];for(const e of resultExams){
+ if(schedulesOnly&&!(Date.parse(e.end)>now||workingExams.has(e.id)))continue;
  const year=e.year||'2026/2027', semester=Number(e.semester||1);
  const periodKey=year+':'+semester;
  if(!resultsOnly&&!profiles.has(periodKey)){
@@ -532,9 +566,14 @@ async function studentOverview(studentId:string,studentMenu?:string|null){
    profiles.set(periodKey,pupil&&!pupil.deletedAt&&(semester!==2||pupil.profileKind==='student'&&pupil.profileYear===year)?pupil:null);
  }
  const pupil=profiles.get(periodKey);
- const enrolled=!!pupil&&!(e.excludedStudentIds||[]).includes(student.id)&&((e.participantsSelected||e.studentIds?.length)?!!e.studentIds?.includes(student.id):pupil.unit===e.unit&&pupil.className===e.className&&(pupil.year||'2026/2027')===(e.year||'2026/2027'));if(enrolled||attemptedExams.has(e.id))schedules.push({id:e.id,title:e.title,topic:e.topic||e.title,subject:e.subject,unit:e.unit,grade:e.grade,start:e.start,end:e.end,duration:e.duration,status:e.status,retakeReason:e.retakeReason||''});}
-
- return Response.json({student,studentPortal:true,studentMenu,demo,exams:schedules,attempts:selectedAttempts.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published&&(!studentMenu||resultsOnly)?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
+ if((pupil&&matchesEnrollment({...pupil,id:student.id},e))||attemptedExams.has(e.id))schedules.push({id:e.id,title:e.title,topic:e.topic||e.title,subject:e.subject,unit:e.unit,grade:e.grade,start:e.start,end:e.end,duration:e.duration,status:e.status,retakeReason:e.retakeReason||''});}
+ const scheduleIds=new Set(schedules.map(e=>e.id));
+ if(schedulesOnly)selectedAttempts=selectedAttempts.filter(a=>scheduleIds.has(a.examId));
+ if(resultsOnly){
+   const order=new Map(selectedAttempts.map((a,index)=>[a.examId,index]));
+   schedules.sort((a,b)=>order.get(a.id)!-order.get(b.id)!);
+ }
+ return Response.json({student,studentPortal:true,studentMenu,demo,studentHistory,exams:schedules,attempts:selectedAttempts.map((a:any)=>({id:a.id,examId:a.examId,status:a.status==='Mengerjakan'&&!a.pausedAt&&Date.now()>=a.deadline?'Dikumpulkan':a.status,published:!!a.published,score:a.published&&(!studentMenu||resultsOnly)?a.score:null,submittedAt:a.submittedAt,publishedAt:a.publishedAt,graded:!!a.graded,resetCount:a.resetCount||0,pauseUntil:a.pauseUntil,securityLocked:!!a.securityLocked,pausedAt:a.pausedAt,deadline:a.deadline}))},{headers:{'Cache-Control':'no-store'}});
 }
 async function monitoringProgress(staff:any,examId:string,withParticipants:boolean){
  const exam=await get(examId);
@@ -820,7 +859,7 @@ async function readStaffMenuDetail(staff:any,kind:string,key:string){
 
 async function GET(req:Request){try{
  const authenticated=await authentication;const {user,authMethod}=authenticated;let staff=authenticated.staff;if(staff?.role==='Guru')staff=await get(staff.id)||staff;if(staff?.role==='Guru'&&!belongsYear(staff))staff={...staff,assignments:[],subject:''};if(staff?.role==='Guru'){const own=(await all('class')).filter((c:any)=>belongsYear(c)&&c.unit===staff.unit);staff={...staff,assignedClassLevels:own.filter((c:any)=>(staff.assignments||[]).some((t:any)=>t.classes?.includes(c.name))).map(({name,grade,unit}:any)=>({name,grade,unit})),homeroomClasses:own.filter((c:any)=>c.unit==='SD'&&c.homeroomId===staff.id)};}if(!staff)return Response.json({needsSetup:!(await get('installation')),user});if(staff.disabled||staff.deletedAt)fail('Akun tidak aktif pada periode ini.');if(query.has('monitorExam'))return await monitoringProgress(staff,query.get('monitorExam')||'',query.get('withParticipants')==='1');
- if(staff.role==='Siswa')return await studentOverview(staff.studentId,query.get('studentMenu'));
+ if(staff.role==='Siswa')return await studentOverview(staff.studentId,query.get('studentMenu'),{page:query.get('page'),topic:query.get('topic'),subject:query.get('subject')});
  const staffScope=(!demo||['2','3'].includes(query.get('menuVersion')||''))&&['Super Admin','Admin Unit','Guru'].includes(staff.role);
  const menu=query.get('menu');
  const detail=query.get('detail');
@@ -937,7 +976,7 @@ if(['preview','enter','answer','saveAnswers','submit','exitExam','securityLock',
  if(a.securityLocked){if(b.action==='enter'||b.action==='heartbeat'||b.action==='securityLock'||b.action==='exitExam')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});fail('Ujian terkunci. Pilih Lanjutkan ujian untuk membuka sesi.');}
  if(!a.sessionHash&&a.pausedAt&&b.action==='heartbeat')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
  if(!a.sessionHash){if(b.action!=='enter')fail(a.pausedAt?'Waktu ujian dijeda oleh pengawas. Masuk ulang untuk melanjutkan.':'Masuk ulang terlebih dahulu.');a.sessionHash=sessionHash;await saveAttempt(a);}
- if(b.action==='tokenDashboard')return studentOverview(a.studentId,b.studentMenu);
+ if(b.action==='tokenDashboard')return studentOverview(a.studentId,b.studentMenu,b.history);
  if(a.pauseUntil){if(['heartbeat','enter','exitExam'].includes(b.action))return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});fail('Waktu ujian sedang dijeda pengawas. Tunggu jeda selesai.');}
  if(b.action==='enter'&&a.pausedAt){a.deadline=Date.now()+a.remainingMs;a.submitAfter=Date.now()+(a.remainingSubmitMs||0);delete a.pausedAt;delete a.remainingMs;delete a.remainingSubmitMs;await saveAttempt(a);}
  if(a.pausedAt&&b.action==='exitExam')return Response.json(publicAttempt(a,exam,student),{headers:{'Cache-Control':'no-store'}});
