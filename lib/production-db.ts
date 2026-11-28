@@ -20,6 +20,7 @@ function postgresQuery(source: string) {
     "(data::jsonb - ARRAY["+paths.replaceAll("$.","")+"])::text")
     .replace(/json_extract\(data,'\$\.(status|unit|year|semester|start|end|ownerId|createdBy|simulation|className|at|graded|published|correctedAt|deadline|pausedAt|securityLocked|pauseUntil|submittedAt|resumeFor|answeredCount|answeredCountVersion)'\)/g,"(data::jsonb ->> '$1')")
     .replace(" IN (1,'true')"," = 'true'")
+    .replace(/json_extract\(records\.data,'\$\.(end|topic|title|subject|deletedAt)'\)/g,"(records.data::jsonb ->> '$1')")
     .replace("json_extract(data,'$.form.title')","(data::jsonb #>> '{form,title}')")
     .replace("json_each(records.data,'$.studentIds')","jsonb_array_elements_text(CASE WHEN jsonb_typeof(records.data::jsonb->'studentIds')='array' THEN records.data::jsonb->'studentIds' ELSE '[]'::jsonb END) AS enrollment(value)")
     .replace("(SELECT json_group_array(json_object('id',json_extract(value,'$.id'),'sourceId',json_extract(value,'$.sourceId'),'type',json_extract(value,'$.type'),'scope',json_extract(value,'$.scope'))) FROM json_each(records.data,'$.questions'))","(SELECT jsonb_agg(jsonb_build_object('id',q->'id','sourceId',q->'sourceId','type',q->'type','scope',q->'scope'))::text FROM jsonb_array_elements(NULLIF(records.data::jsonb->'questions','null'::jsonb)) AS items(q))")

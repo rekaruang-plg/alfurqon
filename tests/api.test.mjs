@@ -1027,6 +1027,42 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  assert(pupilSchedules.exams.some(e=>e.id==='scoped-future-exam'));
  assert(!(await read({studentMenu:'Hasil ujian'})).exams.some(e=>e.id==='scoped-future-exam'));
  assert(pupilSchedules.attempts.every(a=>a.score===null));
+ const past={...activeSchedule,start:new Date(now-7200000).toISOString(),end:new Date(now-3600000).toISOString()};
+ const insertPortalAttempt=sql.prepare('INSERT INTO attempts(id,student_id,exam_id,token_hash,data) VALUES(?,?,?,?,?)');
+ for(let i=0;i<21;i++){
+   const id='portal-past-'+i;
+   await writeRecord(id,'exam',{...past,id,topic:i===0?'Topik halaman kedua':'Topik riwayat',subject:'Matematika'});
+   insertPortalAttempt.run(id,studentId,id,id,JSON.stringify({examId:id,status:'Dikumpulkan',submittedAt:i+1,published:i===0,score:83}));
+ }
+ await writeRecord('portal-extended','exam',{...past,id:'portal-extended'});
+ insertPortalAttempt.run('portal-extended',studentId,'portal-extended','portal-extended',
+   JSON.stringify({examId:'portal-extended',status:'Mengerjakan',deadline:now+600000}));
+ await writeRecord('portal-makeup','exam',{...activeSchedule,id:'portal-makeup',retakeReason:'Susulan',studentIds:[studentId],participantsSelected:true});
+ await writeRecord('semester2:'+period.year+':'+studentId,'academic_profile',{
+   ...await record(studentId),className:'Pindah kelas',profileKind:'student',profileYear:period.year,
+ });
+ await writeRecord('portal-moved','exam',{...activeSchedule,id:'portal-moved',semester:2,className:'Pindah kelas',studentIds:[studentId],participantsSelected:true});
+ const upcoming=await read({studentMenu:'Jadwal ujian'});
+ assert(upcoming.exams.some(e=>e.id==='portal-extended'));
+ assert(upcoming.exams.some(e=>e.id==='portal-makeup'&&e.retakeReason==='Susulan'));
+ assert(upcoming.exams.some(e=>e.id==='portal-moved'));
+ assert(!upcoming.attempts.some(a=>a.id.startsWith('portal-past-')));
+ assert(!upcoming.exams.some(e=>e.id.startsWith('portal-past-')));
+ queryReads=[];
+ const firstHistory=await read({studentMenu:'Hasil ujian'});
+ assert.equal(firstHistory.attempts.length,20);
+ assert.equal(firstHistory.studentHistory.hasNext,true);
+ assert(firstHistory.studentHistory.topics.includes('Topik halaman kedua'));
+ for(const {query} of queryReads)assert(!postgresQuery(query).includes('json_extract'));
+ const secondHistory=await read({studentMenu:'Hasil ujian',page:'2'});
+ assert.equal(secondHistory.attempts.length,2);
+ assert.equal(secondHistory.studentHistory.hasNext,false);
+ assert(secondHistory.attempts.every(a=>!firstHistory.attempts.some(b=>a.id===b.id)));
+ const filteredHistory=await read({studentMenu:'Hasil ujian',topic:'Topik halaman kedua',subject:'Matematika'});
+ assert.deepEqual(filteredHistory.exams.map(e=>e.id),['portal-past-0']);
+ assert.equal(filteredHistory.attempts[0].score,83);
+ sql.prepare("DELETE FROM attempts WHERE id LIKE 'portal-%'").run();
+ sql.prepare("DELETE FROM records WHERE id LIKE 'portal-%' OR id=?").run('semester2:'+period.year+':'+studentId);
  cookie='';
  assert.equal(policy.submissionDelay(10000,5000,false,0.5),1100);
  assert.equal(policy.submissionDelay(10000,7400,false,0.99),100);
