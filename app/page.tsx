@@ -378,6 +378,10 @@ const saveBufferTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
 useEffect(()=>()=>{if(saveBufferTimer.current!==null)clearTimeout(saveBufferTimer.current);},[]);
 async function flush(){if(guardReason.current){if(flushing.current)return;flushing.current=true;try{const a=await api('securityLock',{token,session:session.current,reason:guardReason.current,answers:latestAnswers.current});apply(a);if(a.securityLocked||a.status==='Dikumpulkan'){guardReason.current='';failed.current={};persist(a);}}catch(e:any){setMessage('Halaman terkunci. Menunggu koneksi ke pengawas: '+e.message);}finally{flushing.current=false;}return;}if(exitPending.current){if(flushing.current)return;flushing.current=true;try{const a=await api('exitExam',{token,session:session.current,answers:latestAnswers.current});apply(a);exitPending.current=false;closing.current=false;sessionStorage.removeItem('cbt-active');}catch(e:any){setMessage('Menunggu koneksi untuk mengumpulkan ujian: '+e.message)}finally{flushing.current=false;}return;}if(flushing.current||!Object.keys(failed.current).length||attemptRef.current?.status!=='Mengerjakan'||attemptRef.current.pausedAt)return;
  flushing.current=true;
+ if(saveBufferTimer.current!==null){
+   clearTimeout(saveBufferTimer.current);
+   saveBufferTimer.current=null;
+ }
  try{
    if(!await acquireLock(attemptRef.current.id)){setMessage('Ujian terbuka di tab lain.');return;}
    while(Object.keys(failed.current).length){
@@ -397,6 +401,8 @@ async function flush(){if(guardReason.current){if(flushing.current)return;flushi
      }
      for(const [key,value] of Object.entries(batch))if(failed.current[key]===value)delete failed.current[key];
      persist();
+     // New edits get their own batch window, except when submitting.
+     if(!closing.current&&saveBufferTimer.current!==null)return;
    }
    setStatus('Tersimpan di server');
    setMessage('');
@@ -411,10 +417,10 @@ function change(value:string,questionId=attempt.questions[index].id,nextFlags=fl
    saveBufferTimer.current=setTimeout(()=>{
      saveBufferTimer.current=null;
      if(!closing.current)void flush();
-   },350+Math.floor(Math.random()*251));
+   },1500);
  }
 }
-useEffect(()=>{if(!attempt||attempt.status!=='Mengerjakan')return;const retry=()=>{if(!closing.current)void flush();};window.addEventListener('online',retry);const t=setInterval(retry,5000+Math.floor(Math.random()*2000));const heartbeat=setInterval(async()=>{if(flushing.current||closing.current||Object.keys(failed.current).length&&!attemptRef.current?.pausedAt)return;flushing.current=true;try{if(!await acquireLock(attempt.id))return;const a=await api('heartbeat',{token,session:session.current,compact:true});apply(a);persist()}catch(e:any){setMessage(e.message);if(e.message.includes('dijeda'))apply({...attemptRef.current,pausedAt:Date.now(),remainingMs:Math.max(0,attemptRef.current.deadline-Date.now()-offset.current),serverNow:Date.now()+offset.current})}finally{flushing.current=false;}},25000+Math.floor(Math.random()*10000));return()=>{clearInterval(t);clearInterval(heartbeat);window.removeEventListener('online',retry)}},[attempt?.id,attempt?.status,token]);
+useEffect(()=>{if(!attempt||attempt.status!=='Mengerjakan')return;const retry=()=>{if(!closing.current)void flush();};window.addEventListener('online',retry);const t=setInterval(()=>{if(saveBufferTimer.current===null)retry();},5000+Math.floor(Math.random()*2000));const heartbeat=setInterval(async()=>{if(flushing.current||closing.current||Object.keys(failed.current).length&&!attemptRef.current?.pausedAt)return;flushing.current=true;try{if(!await acquireLock(attempt.id))return;const a=await api('heartbeat',{token,session:session.current,compact:true});apply(a);persist()}catch(e:any){setMessage(e.message);if(e.message.includes('dijeda'))apply({...attemptRef.current,pausedAt:Date.now(),remainingMs:Math.max(0,attemptRef.current.deadline-Date.now()-offset.current),serverNow:Date.now()+offset.current})}finally{flushing.current=false;}},25000+Math.floor(Math.random()*10000));return()=>{clearInterval(t);clearInterval(heartbeat);window.removeEventListener('online',retry)}},[attempt?.id,attempt?.status,token]);
 async function submit(auto=false){
  if(closing.current||auto&&Date.now()-lastAutoSubmit.current<5000)return;
  if(auto)lastAutoSubmit.current=Date.now();
