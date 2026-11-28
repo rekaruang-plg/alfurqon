@@ -35,8 +35,11 @@ const generated=evaluate(strip(fs.readFileSync('lib/generated-account.ts','utf8'
 const authlib=evaluate(strip(fs.readFileSync('lib/staff-auth.ts','utf8')),{env:{DB},getChatGPTUser:async()=>null,...pw});
 const {sameOrigin}=evaluate(fs.readFileSync('lib/request-origin.ts','utf8'),{process});
 const operationLogs=[];
+let telemetryRandom=0;
+let telemetryTimeOffset=0;
 const telemetry=evaluate(fs.readFileSync('lib/operation-telemetry.ts','utf8'),{
- performance,Error,console:{info:line=>operationLogs.push(JSON.parse(line))},
+ performance:{now:()=>performance.now()+telemetryTimeOffset},Math:{round:Math.round,random:()=>telemetryRandom},Error,
+ console:{info:line=>operationLogs.push(JSON.parse(line))},
 });
 const authRoutes=evaluate(strip(fs.readFileSync('app/api/auth/route.ts','utf8')),{sameOrigin,...telemetry,...authlib,...pw,...model,standardPassword:generated.standardPassword});
 let cookie='';
@@ -1359,6 +1362,16 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
    event.identify('private-unlisted-action');return Response.json({});
  });
  assert.equal(operationLogs.length,start);
+ telemetryRandom=0.5;
+ await observeOperation('cbt',async event=>{
+   event.identify('saveAnswers');return Response.json({});
+ });
+ assert.equal(operationLogs.length,start);
+ await observeOperation('cbt',async event=>{
+   event.identify('saveAnswers');telemetryTimeOffset=1000;return Response.json({});
+ });
+ telemetryTimeOffset=0;
+ assert.equal(operationLogs.at(-1).sampleRate,1);
  await observeOperation('cbt',async event=>{
    event.identify('saveAnswers');event.failure(new Error('Operasi database gagal. Muat ulang dan coba kembali.'));
    return Response.json({error:'private answer'}, {status:400});
@@ -1366,13 +1379,15 @@ const attemptReads=queryReads.filter(read=>read.query.includes('FROM attempts'))
  await observeOperation('cbt',async event=>{
    event.identify('submit');event.notConfirmed();return Response.json({token:'private token'});
  });
- assert.deepEqual(operationLogs.slice(start).map(event=>event.outcome),['database_error','not_confirmed']);
+ assert.deepEqual(operationLogs.slice(start).map(event=>event.outcome),['ok','database_error','not_confirmed']);
+ assert(operationLogs.some(event=>event.operation==='autosave'&&event.outcome==='ok'&&event.sampleRate===0.05));
+ assert.equal(operationLogs[start+1].sampleRate,1);
  for(const operation of ['login','start_exam','autosave','submit_exam']){
    assert(operationLogs.some(event=>event.operation===operation&&event.outcome==='ok'));
  }
  assert(operationLogs.some(event=>event.operation==='login'&&event.outcome==='rejected'));
  for(const event of operationLogs){
-   assert.deepEqual(Object.keys(event).sort(),['durationMs','event','operation','outcome','statusCode']);
+   assert.deepEqual(Object.keys(event).sort(),['durationMs','event','operation','outcome','sampleRate','statusCode']);
    assert.equal(event.event,'cbt_operation');
    assert(Number.isInteger(event.durationMs)&&event.durationMs>=0);
  }

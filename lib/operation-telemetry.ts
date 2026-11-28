@@ -1,5 +1,7 @@
 type Operation = 'login' | 'start_exam' | 'autosave' | 'submit_exam';
 type Outcome = 'ok' | 'rejected' | 'rate_limited' | 'database_error' | 'write_conflict' | 'server_error' | 'not_confirmed';
+const fastAutosaveSampleRate = 0.05;
+const slowAutosaveMs = 1000;
 
 export type OperationTelemetry = {
   identify(action: unknown): void;
@@ -45,10 +47,15 @@ export async function observeOperation(
     if (operation) {
       const result = outcome ?? (statusCode === 429 ? 'rate_limited' :
         statusCode >= 500 ? 'server_error' : statusCode >= 400 ? 'rejected' : 'ok');
-      console.info(JSON.stringify({
-        event: 'cbt_operation', operation, durationMs: Math.round(performance.now() - start),
-        statusCode, outcome: result,
-      }));
+      const durationMs = Math.round(performance.now() - start);
+      const sampleRate = operation === 'autosave' && result === 'ok' && durationMs < slowAutosaveMs
+        ? fastAutosaveSampleRate : 1;
+      if (sampleRate === 1 || Math.random() < sampleRate) {
+        console.info(JSON.stringify({
+          event: 'cbt_operation', operation, durationMs,
+          statusCode, outcome: result, sampleRate,
+        }));
+      }
     }
   }
 }
