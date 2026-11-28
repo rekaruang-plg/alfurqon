@@ -11,3 +11,10 @@ export function submissionDelay(deadline:number,now:number,automatic:boolean,ran
  const timeWithMargin=deadline-now-2500;
  return Math.max(0,Math.min(Math.floor(timeWithMargin),Math.floor(random*2201)));
 }
+
+export function autosaveRetryDelay(failures:number,random=Math.random()){
+ const base=Math.min(30000,5000*2**Math.min(failures-1,3));
+ const minimum=base*0.9;
+ const maximum=Math.min(30000,base*1.1);
+ return Math.round(minimum+(maximum-minimum)*random);
+}
