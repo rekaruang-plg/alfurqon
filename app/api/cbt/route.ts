@@ -602,8 +602,20 @@ async function readStaffMenu(staff:any,menu:string,user:any,authMethod:string){
  const needsShared=!compactRoster&&(menu==='Token ujian'||menu==='Monitoring');
  const bankUnits=staff.role==='Super Admin'?[]:[...new Set([staff.unit,...teacher?(staff.assignments||[]).map((task:any)=>task.unit):[]])];
  const bankUnitFilter=bankUnits.length?" AND json_extract(data,'$.unit') IN ("+bankUnits.map(()=>'?').join(',')+")":'';
+ const menuExams=async()=>{
+   if(!teacher)return list('exam');
+   if(menu!=='Monitoring')return all('exam');
+   // Monitoring duties and navigation count only exams in the teacher's own unit.
+   // Leave legacy semester values to inPeriod so they retain JS number coercion.
+   const {results}=await db().prepare(
+     "SELECT id,version,data FROM records WHERE kind=? AND json_extract(data,'$.unit')=? "+
+     "AND COALESCE(NULLIF(CAST(json_extract(data,'$.year') AS TEXT),''),'2026/2027')=? "+
+     "AND COALESCE(NULLIF(CAST(json_extract(data,'$.semester') AS TEXT),''),'1')<>?"
+   ).bind('exam',staff.unit,period.year,period.semester===1?'2':'1').all();
+   return results.map(row=>({...JSON.parse(row.data),id:row.id,version:row.version})).filter(e=>!e.deletedAt);
+ };
  const [years,students,exams,classes,people,subjects,topics,logs,sharedRows,draftRows,loginAccounts]=await Promise.all([
-   all('year'),list('student'),teacher?all('exam'):list('exam'),list('class'),list('staff'),list('subject'),list('topic'),
+   all('year'),list('student'),menuExams(),list('class'),list('staff'),list('subject'),list('topic'),
    menu==='Riwayat aktivitas'?db().prepare("SELECT data FROM records WHERE kind=?"+(staff.role==='Admin Unit'?" AND json_extract(data,'$.unit')=?":"")+" ORDER BY json_extract(data,'$.at') DESC,id DESC LIMIT 50").bind(...(staff.role==='Admin Unit'?['audit',staff.unit]:['audit'])).all().then(r=>r.results.map((row:any)=>JSON.parse(row.data))):[],
    needsShared?all('shared_token'):[],
    menu==='Buat soal'?db().prepare("SELECT id,json_remove(data,'$.form') AS summary,json_extract(data,'$.form.title') AS title FROM records WHERE kind=? AND json_extract(data,'$.ownerId')=?").bind('draft',staff.id).all().then(r=>r.results):[],

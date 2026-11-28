@@ -969,6 +969,33 @@ console.log('PASS: Rev6 super admin sees three units, each unit admin only its u
  const teacherToken=await read({menu:'Token ujian'});
  assert(teacherToken.exams.length>0&&teacherToken.exams.every(e=>e.unit==='SD'));
  assert((await read({menu:'Monitoring'})).exams.some(e=>e.id===examId));
+ const monitoringFixture=await record(examId);
+ const otherSchedules=[
+   ['monitor-other-unit',{unit:'SMP'}],
+   ['monitor-other-year',{year:'2043/2044'}],
+   ['monitor-other-semester',{semester:'2'}],
+   ['monitor-no-duty',{duties:[]}],
+   ['monitor-deleted',{deletedAt:Date.now()}],
+   ['monitor-default-semester',{semester:undefined}],
+   ['monitor-legacy-semester',{semester:'01'}],
+ ];
+ for(const [id,override] of otherSchedules)await writeRecord(id,'exam',{...monitoringFixture,...override,id});
+ queryReads=[];
+ const teacherMonitoring=await read({menu:'Monitoring',menuVersion:'3'});
+ const examReads=queryReads.filter(r=>r.values[0]==='exam');
+ assert.equal(examReads.length,1);
+ const [examRead]=examReads;
+ assert.deepEqual(examRead.values,['exam','SD',period.year,'2']);
+ const candidateIds=sql.prepare(examRead.query).all(...examRead.values).map(row=>row.id);
+ const visibleIds=teacherMonitoring.exams.map(e=>e.id);
+ for(const [id] of otherSchedules.slice(0,3))assert(!candidateIds.includes(id)&&!visibleIds.includes(id));
+ for(const [id] of otherSchedules.slice(3,5))assert(candidateIds.includes(id)&&!visibleIds.includes(id));
+ for(const id of [examId,'monitor-default-semester','monitor-legacy-semester'])assert(candidateIds.includes(id)&&visibleIds.includes(id));
+ assert(teacherMonitoring.navigation.monitor&&teacherMonitoring.navigation.token);
+ const monitoringSQL=postgresQuery(examRead.query);
+ assert(!monitoringSQL.includes('json_extract'));
+ assert.match(monitoringSQL,/->> 'year'.+\$3.+->> 'semester'.+\$4/);
+ for(const [id] of otherSchedules)sql.prepare('DELETE FROM records WHERE id=?').run(id);
  await read({detail:'bank',id:bankId},404);
  const teacherGrades=await read({menu:'Koreksi & nilai'});
  assert(!teacherGrades.attempts.some(a=>a.id===attemptId));
